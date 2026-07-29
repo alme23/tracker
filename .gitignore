@@ -44,3 +44,8 @@ go.work.sum
 # .idea/
 # .vscode/
 >>>>>>> e137501e17006653cf14b2834fea1a6936f5a883
+
+*.db
+*.db-shm
+*.db-wal
+*.sql
