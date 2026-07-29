@@ -125,6 +125,42 @@ type SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX struct {
 	Size         uint32
 }
 
+// Структуры Win32 API для маппинга памяти адаптеров
+type ipAdapterAddresses struct {
+	Length                uint32
+	IfIndex               uint32
+	Next                  *ipAdapterAddresses
+	AdapterName           *byte
+	FirstUnicastAddress   *ipAdapterUnicastAddress
+	_                     uintptr // Пропускаем неиспользуемые указатели
+	_                     uintptr
+	_                     uintptr
+	Description           *uint16
+	FriendlyName          *uint16
+	PhysicalAddress       [8]byte
+	PhysicalAddressLength uint32
+	Flags                 uint32
+	Mtu                   uint32
+	IfType                uint32
+	OperStatus            uint32
+}
+
+type ipAdapterUnicastAddress struct {
+	Length             uint32
+	Flags              uint32
+	Next               *ipAdapterUnicastAddress
+	Address            socketAddress
+	BaseLifetime       uint32
+	PreferredLifetime  uint32
+	LeaseLifetime      uint32
+	OnLinkPrefixLength uint8
+}
+
+type socketAddress struct {
+	Sockaddr       *syscall.RawSockaddrAny
+	SockaddrLength int32
+}
+
 var (
 	modadvapi32      = syscall.NewLazyDLL("advapi32.dll")
 	procGetUserNameW = modadvapi32.NewProc("GetUserNameW")
@@ -147,4 +183,7 @@ var (
 
 	modsecur32         = syscall.NewLazyDLL("secur32.dll")
 	procGetUserNameExW = modsecur32.NewProc("GetUserNameExW")
+
+	modiphlpapi              = syscall.NewLazyDLL("iphlpapi.dll")
+	procGetAdaptersAddresses = modiphlpapi.NewProc("GetAdaptersAddresses")
 )

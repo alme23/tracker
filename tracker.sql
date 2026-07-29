@@ -36,7 +36,17 @@ CREATE TABLE host_metrics (
 			ram_free_bytes INTEGER,
 			client_ip TEXT
 		);
-INSERT INTO host_metrics VALUES(1,1785319117,'IT-S','IT-S.rsa.rogsibal.ru','rsa.rogsibal.ru','Windows 10 Pro','Professional','22H2','19045.6456','2024-11-05 18:30:20','amd64','00331-10000-00001-AA659','44CF1830-E856-4864-A4E7-E79DCE710F4B','Maxim.Alexandrov','Александров Максим Евгеньевич','rsa.rogsibal.ru','Domain','Hewlett-Packard','J61 v03.85','11/19/2014','Unknown Vendor','1589','0.00','Unknown/To be filled by O.E.M.','Intel(R) Xeon(R) CPU E5-1620 0 @ 3.60GHz',8,8,3591,262144,1048576,10485760,42869710848,17625247744,'172.17.113.11');
+INSERT INTO host_metrics VALUES(1,1785332498,'IT-S','IT-S.rsa.rogsibal.ru','rsa.rogsibal.ru','Windows 10 Pro','Professional','22H2','Running','2024-11-05 18:30:20','Not Installed','00331-10000-00001-AA659','44CF1830-E856-4864-A4E7-E79DCE710F4B','Maxim.Alexandrov','Александров Максим Евгеньевич','rsa.rogsibal.ru','Domain','Hewlett-Packard','J61 v03.85','11/19/2014','Unknown Vendor','1589','0.00','Unknown/To be filled by O.E.M.','Intel(R) Xeon(R) CPU E5-1620 0 @ 3.60GHz',8,8,3591,262144,1048576,10485760,42869710848,16144490496,'172.17.113.11');
+CREATE TABLE session_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp INTEGER,
+			computer_name TEXT,
+			machine_guid TEXT,
+			user_login TEXT,
+			user_fullname TEXT,
+			client_ip TEXT
+		);
+INSERT INTO session_logs VALUES(1,1785330651,'IT-S','44CF1830-E856-4864-A4E7-E79DCE710F4B','Maxim.Alexandrov','Александров Максим Евгеньевич','172.17.113.11');
 CREATE TABLE gpu_metrics (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			host_id INTEGER,
@@ -62,9 +72,9 @@ CREATE TABLE disk_metrics (
 			free_bytes INTEGER,
 			FOREIGN KEY(host_id) REFERENCES host_metrics(id) ON DELETE CASCADE
 		);
-INSERT INTO disk_metrics VALUES(1,1,'C:\','HDD','Unknown Vendor (Requires Admin)','Unknown S/N (Requires Admin)',498951073792,207509553152);
+INSERT INTO disk_metrics VALUES(1,1,'C:\','HDD','Unknown Vendor (Requires Admin)','Unknown S/N (Requires Admin)',498951073792,207427952640);
 INSERT INTO disk_metrics VALUES(2,1,'D:\','CDROM','Unknown Vendor (Requires Admin)','Unknown S/N (Requires Admin)',250806272,0);
-INSERT INTO disk_metrics VALUES(3,1,'G:\','HDD','Unknown Vendor (Requires Admin)','Unknown S/N (Requires Admin)',2000396742656,1861624500224);
+INSERT INTO disk_metrics VALUES(3,1,'G:\','HDD','Unknown Vendor (Requires Admin)','Unknown S/N (Requires Admin)',2000396742656,1861624033280);
 CREATE TABLE network_metrics (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			host_id INTEGER,
@@ -92,6 +102,7 @@ INSERT INTO network_metrics VALUES(14,1,'Сетевое подключение B
 INSERT INTO network_metrics VALUES(15,1,'Подключение по локальной сети* 2','','down','static','');
 INSERT INTO network_metrics VALUES(16,1,'eth0','','up','static','172.17.113.11');
 INSERT INTO network_metrics VALUES(17,1,'Ethernet (отладчик ядра)','','down','dhcp','');
+INSERT INTO sqlite_sequence VALUES('session_logs',1);
 INSERT INTO sqlite_sequence VALUES('host_metrics',1);
 INSERT INTO sqlite_sequence VALUES('gpu_metrics',4);
 INSERT INTO sqlite_sequence VALUES('disk_metrics',3);

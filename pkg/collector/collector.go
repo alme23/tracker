@@ -56,5 +56,10 @@ func CollectMetrics() (Metrics, error) {
 		metrics.Network = netIfs
 	}
 
+	// 10. Сбор данных о службах RDP/VNC удаленного доступа (ДОБАВЛЕНО)
+	if ra, err := GetRemoteAccessServices(); err == nil {
+		metrics.RemoteAccess = ra
+	}
+
 	return metrics, nil
 }

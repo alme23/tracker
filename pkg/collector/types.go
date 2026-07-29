@@ -66,16 +66,17 @@ func (ip IPAddress) String() string {
 }
 
 type Metrics struct {
-	Timestamp int64              `json:"timestamp"`
-	Host      HostInfo           `json:"host"`
-	User      UserInfo           `json:"user"`
-	BaseBoard BaseBoardInfo      `json:"baseboard"`
-	BIOS      BIOSInfo           `json:"bios"`
-	CPU       CPUInfo            `json:"cpu"`
-	Video     []VideoInfo        `json:"video"`
-	Memory    HardwareInfo       `json:"memory"`
-	Disks     []DiskInfo         `json:"disks"`
-	Network   []NetworkInterface `json:"network"`
+	Timestamp    int64              `json:"timestamp"`
+	Host         HostInfo           `json:"host"`
+	User         UserInfo           `json:"user"`
+	BaseBoard    BaseBoardInfo      `json:"baseboard"`
+	BIOS         BIOSInfo           `json:"bios"`
+	CPU          CPUInfo            `json:"cpu"`
+	Video        []VideoInfo        `json:"video"`
+	Memory       HardwareInfo       `json:"memory"`
+	Disks        []DiskInfo         `json:"disks"`
+	Network      []NetworkInterface `json:"network"`
+	RemoteAccess RemoteAccessInfo   `gob:"remote_access"`
 }
 
 type HostInfo struct {
@@ -151,4 +152,11 @@ type NetworkInterface struct {
 	Status      InterfaceStatus  `json:"status"`
 	IPType      IPAssignmentType `json:"ip_type"`
 	IPAddresses []IPAddress      `json:"ip_addresses"`
+}
+
+type RemoteAccessInfo struct {
+	RDPAvailable bool   `gob:"rdp_available"` // Запущена ли служба TermService
+	RDPStatus    string `gob:"rdp_status"`    // Статус службы (Running, Stopped и т.д.)
+	VNCAvailable bool   `gob:"vnc_available"` // Найден ли и запущен ли хоть один VNC-сервер
+	VNCStatus    string `gob:"vnc_status"`    // Имя и статус найденного VNC сервиса
 }

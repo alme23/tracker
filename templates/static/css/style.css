@@ -1,0 +1,31 @@
+body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; color: #333; margin: 0; padding: 20px; }
+.container { max-width: 1300px; margin: 0 auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+h2 { margin-top: 0; color: #2c3e50; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; }
+.search-box { margin-bottom: 20px; display: flex; gap: 10px; }
+.search-box input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+.search-box button { padding: 10px 20px; background-color: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+.search-box button:hover { background-color: #2980b9; }
+.search-box a { padding: 10px 15px; background-color: #95a5a6; color: white; text-decoration: none; border-radius: 4px; font-size: 14px; }
+.search-box a:hover { background-color: #7f8c8d; }
+table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }
+th { background-color: #34495e; color: white; font-weight: 600; }
+tr { transition: background-color 0.3s ease; }
+tr:hover { background-color: #f9f9f9; }
+.no-data { text-align: center; color: #7f8c8d; padding: 30px; font-style: italic; }
+.badge { display: inline-block; padding: 3px 8px; background: #e1f5fe; color: #0288d1; border-radius: 3px; font-family: monospace; font-size: 12px; }
+
+.status-up { color: #2ecc71; font-weight: bold; }
+.status-down { color: #e74c3c; font-weight: normal; }
+
+.fqdn-link { color: #3498db; text-decoration: none; font-weight: 600; cursor: pointer; border-bottom: 1px dashed #3498db; }
+.fqdn-link:hover { color: #2980b9; border-bottom-style: solid; }
+.updated-flash { animation: pulse 1.5s ease-out; }
+@keyframes pulse { 0% { background-color: #2ecc71; color: white; } 100% { background-color: transparent; } }
+
+.modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
+.modal-content { background-color: white; margin: 10% auto; padding: 25px; border-radius: 6px; width: 50%; box-shadow: 0 5px 15px rgba(0,0,0,0.3); position: relative; }
+.close-btn { position: absolute; right: 20px; top: 15px; font-size: 24px; cursor: pointer; color: #95a5a6; }
+.close-btn:hover { color: #333; }
+.modal-item { margin-bottom: 12px; border-bottom: 1px solid #f2f2f2; padding-bottom: 8px; }
+.modal-item strong { display: inline-block; width: 180px; color: #34495e; }

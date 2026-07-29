@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tracker: Мониторинг Рабочих Станций</title>
+    <!-- Подключаем автономное ядро Tailwind CSS -->
+    <script src="/static/js/tailwind.js"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto bg-white p-6 rounded-xl shadow-md">
+        <!-- Заголовок панели -->
+        <div class="flex items-center space-x-3 border-b border-slate-200 pb-4 mb-6">
+            <span class="text-2xl">🖥️</span>
+            <h2 class="text-2xl font-bold text-slate-800">Tracker: Панель Учета Рабочих Станций</h2>
+        </div>
+
+        <!-- Интерактивная панель поиска -->
+        <div class="mb-6 flex gap-3 items-center">
+            <div class="relative flex-1">
+                <input type="text" id="searchQuery" value="{{.Query}}"
+                       placeholder="Начните вводить имя ПК, FQDN, логин, ФИО или IP-адрес для живого поиска..."
+                       class="w-full px-4 py-2.5 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all">
+                <!-- Крошечный спиннер загрузки -->
+                <div id="searchSpinner" class="hidden absolute right-3 top-3.5 h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600"></div>
+            </div>
+            <button id="clearSearchBtn" onclick="resetLiveSearch()"
+                    class="hidden px-4 py-2.5 bg-slate-400 hover:bg-slate-500 text-white rounded-lg text-sm font-medium transition-colors flex items-center">
+                Сбросить
+            </button>
+        </div>
+
+        <!-- Таблица данных -->
+        <div class="overflow-x-auto border border-slate-200 rounded-lg shadow-sm">
+            <table class="w-full border-collapse text-left text-sm">
+                <thead>
+                    <tr class="bg-slate-800 text-white uppercase text-xs tracking-wider">
+                        <th class="px-6 py-3.5 font-semibold">Отображаемое имя (DisplayName)</th>
+                        <th class="px-6 py-3.5 font-semibold">Логин (SAMAccount)</th>
+                        <th class="px-6 py-3.5 font-semibold">Полное имя компьютера (FQDN)</th>
+                        <th class="px-6 py-3.5 font-semibold">IP-адрес компьютера</th>
+                        <th class="px-6 py-3.5 font-semibold">Статус RDP</th>
+                        <th class="px-6 py-3.5 font-semibold">Статус VNC</th>
+                        <th class="px-6 py-3.5 font-semibold">Время отправки</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBody" class="divide-y divide-slate-200">
+                    {{range .Logs}}
+                    <tr id="row-{{.MachineGUID}}" class="hover:bg-slate-50/80 transition-colors duration-200">
+                        <td class="cell-name px-6 py-4 font-medium text-slate-900">{{.UserFullname}}</td>
+                        <td class="cell-login px-6 py-4"><code class="px-2 py-1 bg-slate-100 rounded text-xs text-red-600 font-mono">{{.UserLogin}}</code></td>
+                        <td class="cell-fqdn px-6 py-4">
+                            <span class="fqdn-link text-blue-600 hover:text-blue-800 font-semibold cursor-pointer border-b border-dashed border-blue-500 hover:border-solid transition-all"
+                                  onclick="openHardwareModal('{{.MachineGUID}}', '{{.FQDN}}')">
+                                {{.FQDN}}
+                            </span>
+                        </td>
+                        <td class="cell-ip px-6 py-4 text-slate-600 font-mono">{{.ClientIP}}</td>
+
+                        <!-- Столбец Статус RDP -->
+                        <td class="cell-rdp px-6 py-4">
+                            <div class="flex items-center justify-center">
+                                {{if textContains .RDPStatus "Running"}}
+                                    <span class="relative flex h-3 w-3" title="RDP: Активен">
+                                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                        <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                                    </span>
+                                {{else}}
+                                    <span class="inline-flex rounded-full h-3 w-3 bg-red-500" title="RDP: Отключен"></span>
+                                {{end}}
+                            </div>
+                        </td>
+
+                        <!-- Столбец Статус VNC -->
+                        <td class="cell-vnc px-6 py-4">
+                            <div class="flex items-center justify-center">
+                                {{if textContains .VNCStatus "Running"}}
+                                    <span class="relative flex h-3 w-3" title="VNC: Активен">
+                                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                        <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                                    </span>
+                                {{else if textContains .VNCStatus "Not Found"}}
+                                    <span class="inline-flex rounded-full h-3 w-3 bg-slate-400" title="VNC: Не установлен"></span>
+                                {{else if textContains .VNCStatus "Not Installed"}}
+                                    <span class="inline-flex rounded-full h-3 w-3 bg-slate-400" title="VNC: Не установлен"></span>
+                                {{else}}
+                                    <span class="inline-flex rounded-full h-3 w-3 bg-red-500" title="VNC: Остановлен"></span>
+                                {{end}}
+                            </div>
+                        </td>
+
+                        <td class="cell-time px-6 py-4 text-slate-500 font-medium"><strong>{{.Timestamp}}</strong></td>
+                    </tr>
+                    {{else}}
+                    <tr id="noDataRow">
+                        <td colspan="7" class="text-center text-slate-400 py-10 italic">Записи не найдены или журнал пуст</td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Модальное окно спецификаций -->
+    <div id="hwModal" class="hidden fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm transition-opacity duration-300">
+        <div class="flex min-h-full items-center justify-center p-4">
+            <div class="w-full max-w-2xl transform overflow-hidden rounded-xl bg-white p-6 shadow-2xl transition-all border border-slate-100 relative">
+                <span class="absolute right-4 top-4 text-2xl cursor-pointer text-slate-400 hover:text-slate-600 transition-colors"
+                      onclick="closeModal()">&times;</span>
+                <h3 id="modalTitle" class="text-lg font-bold text-slate-900 border-b border-slate-200 pb-3 mb-4 flex items-center">
+                    Спецификация оборудования
+                </h3>
+                <div id="modalBody" class="space-y-3.5 text-sm text-slate-600">
+                    Загрузка данных...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Подключаем внешний изолированный файл логики -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
