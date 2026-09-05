@@ -1,3 +1,5 @@
+// tracker/internal/collector/host.go
+
 //go:build windows
 
 package collector

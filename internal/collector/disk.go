@@ -1,3 +1,5 @@
+// tracker/internal/collector/disk.go
+
 //go:build windows
 
 package collector
@@ -76,8 +78,7 @@ func (c *DiskCollector) processVolume(volumeGUIDPath string) (models.DriveInfo, 
 	// Получаем информацию о диске
 	mountPathPtr, err := windows.UTF16PtrFromString(mountPath)
 	if err == nil {
-		c.collectDiskSpace(&info, mountPathPtr)
-		c.collectVolumeInfo(&info, mountPathPtr)
+		c.collectVolumeInfoAndSpace(&info, mountPathPtr)
 	}
 
 	return info, true
@@ -133,32 +134,16 @@ func (c *DiskCollector) formatMountPath(mountPath string) string {
 	return strings.TrimSuffix(mountPath, "\\")
 }
 
-// collectDiskSpace собирает информацию о размере
-func (c *DiskCollector) collectDiskSpace(info *models.DriveInfo, mountPathPtr *uint16) {
-	var freeBytesAvailable, totalNumberOfBytes, totalNumberOfFreeBytes uint64
-
-	err := windows.GetDiskFreeSpaceEx(
-		mountPathPtr,
-		&freeBytesAvailable,
-		&totalNumberOfBytes,
-		&totalNumberOfFreeBytes,
-	)
-
-	if err == nil {
-		info.TotalBytes = totalNumberOfBytes
-		info.FreeBytes = freeBytesAvailable
-		info.UsedBytes = totalNumberOfBytes - freeBytesAvailable
-	}
-}
-
-// collectVolumeInfo собирает информацию о томе
-func (c *DiskCollector) collectVolumeInfo(info *models.DriveInfo, mountPathPtr *uint16) {
+// collectVolumeInfo и collectDiskSpace можно объединить в один вызов
+func (c *DiskCollector) collectVolumeInfoAndSpace(info *models.DriveInfo, mountPathPtr *uint16) {
 	var volumeNameBuf [256]uint16
 	var volumeSerial uint32
 	var maxComponentLength uint32
 	var fileSystemFlags uint32
 	var fsNameBuf [256]uint16
+	var freeBytesAvailable, totalNumberOfBytes, totalNumberOfFreeBytes uint64
 
+	// Получаем информацию о томе
 	err := windows.GetVolumeInformation(
 		mountPathPtr,
 		&volumeNameBuf[0],
@@ -172,14 +157,28 @@ func (c *DiskCollector) collectVolumeInfo(info *models.DriveInfo, mountPathPtr *
 
 	if err == nil {
 		info.VolumeName = windows.UTF16ToString(volumeNameBuf[:])
-		info.SerialNumber = fmt.Sprintf("%04X-%04X",
-			(volumeSerial>>16)&0xFFFF,
-			volumeSerial&0xFFFF)
+		info.SerialNumber = fmt.Sprintf("%04X-%04X", (volumeSerial>>16)&0xFFFF, volumeSerial&0xFFFF)
 		info.FSType = windows.UTF16ToString(fsNameBuf[:])
 		info.IsReady = true
 	} else {
 		info.FSType = "UNKNOWN"
 		info.IsReady = false
+	}
+
+	// Получаем информацию о размере (только если диск готов)
+	if info.IsReady {
+		err = windows.GetDiskFreeSpaceEx(
+			mountPathPtr,
+			&freeBytesAvailable,
+			&totalNumberOfBytes,
+			&totalNumberOfFreeBytes,
+		)
+
+		if err == nil {
+			info.TotalBytes = totalNumberOfBytes
+			info.FreeBytes = freeBytesAvailable
+			info.UsedBytes = totalNumberOfBytes - freeBytesAvailable
+		}
 	}
 }
 

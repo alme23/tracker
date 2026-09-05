@@ -34,7 +34,7 @@ type HostInfo struct {
 	BIOSMinorRelease uint32 `json:"bios_minor_release"` // Минорная версия BIOS
 
 	// Информация о материнской плате
-	BaseBoardManufacturer string `json:"baseboard_manufacturer,omitempty"` // Производитель платы
-	BaseBoardProduct      string `json:"baseboard_product,omitempty"`      // Модель платы
-	BaseBoardVersion      string `json:"baseboard_version,omitempty"`      // Версия платы
+	BaseBoardManufacturer string `json:"baseboard_manufacturer"` // Производитель платы
+	BaseBoardProduct      string `json:"baseboard_product"`      // Модель платы
+	BaseBoardVersion      string `json:"baseboard_version"`      // Версия платы
 }

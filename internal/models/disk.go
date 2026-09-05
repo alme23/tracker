@@ -65,15 +65,15 @@ func (t *DriveType) UnmarshalJSON(data []byte) error {
 
 // DriveInfo содержит детальную информацию о логическом диске
 type DriveInfo struct {
-	Letter       string    `json:"letter"`                  // Буква диска ("C:") или путь монтирования
-	Type         DriveType `json:"type"`                    // Тип диска
-	FSType       string    `json:"fs_type"`                 // Тип файловой системы ("NTFS", "exFAT")
-	TotalBytes   uint64    `json:"total_bytes"`             // Общий объем в байтах
-	FreeBytes    uint64    `json:"free_bytes"`              // Свободный объем в байтах
-	UsedBytes    uint64    `json:"used_bytes,omitempty"`    // Использованный объем
-	VolumeName   string    `json:"volume_name,omitempty"`   // Метка тома
-	SerialNumber string    `json:"serial_number,omitempty"` // Серийный номер
-	IsReady      bool      `json:"is_ready"`                // Готов ли диск
+	Letter       string    `json:"letter"`        // Буква диска ("C:") или путь монтирования
+	Type         DriveType `json:"type"`          // Тип диска
+	FSType       string    `json:"fs_type"`       // Тип файловой системы ("NTFS", "exFAT")
+	TotalBytes   uint64    `json:"total_bytes"`   // Общий объем в байтах
+	FreeBytes    uint64    `json:"free_bytes"`    // Свободный объем в байтах
+	UsedBytes    uint64    `json:"used_bytes"`    // Использованный объем
+	VolumeName   string    `json:"volume_name"`   // Метка тома
+	SerialNumber string    `json:"serial_number"` // Серийный номер
+	IsReady      bool      `json:"is_ready"`      // Готов ли диск
 }
 
 type DiskStatuses []DriveInfo

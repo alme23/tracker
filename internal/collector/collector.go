@@ -1,8 +1,12 @@
+// tracker/internal/collector/collector.go
+//
 //go:build windows
 
 package collector
 
 import (
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/alme23/tracker/internal/models"
@@ -42,87 +46,105 @@ func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 	}
 
 	var g errgroup.Group
+	var mu sync.Mutex
 
-	// 1. Запускаем коллектор операционной системы
+	// 1. Коллектор операционной системы
 	g.Go(func() error {
 		osData, err := sc.osColl.Collect()
 		if err != nil {
-			return err
+			return fmt.Errorf("OS collector: %w", err)
 		}
+		mu.Lock()
 		snapshot.OS = osData
+		mu.Unlock()
 		return nil
 	})
 
-	// 2. Запускаем коллектор сетевых интерфейсов
+	// 2. Коллектор сетевых интерфейсов
 	g.Go(func() error {
 		networkData, err := sc.networkColl.Collect()
 		if err != nil {
-			return err
+			return fmt.Errorf("network collector: %w", err)
 		}
+		mu.Lock()
 		snapshot.Network = networkData
+		mu.Unlock()
 		return nil
 	})
 
-	// 3. Запускаем коллектор Windows-служб (RDP/VNC)
+	// 3. Коллектор Windows-служб (RDP/VNC)
 	g.Go(func() error {
 		servicesData, err := sc.serviceColl.Collect()
 		if err != nil {
-			return err
+			return fmt.Errorf("service collector: %w", err)
 		}
+		mu.Lock()
 		snapshot.Services = servicesData
+		mu.Unlock()
 		return nil
 	})
 
-	// 4. Запускаем коллектор процессора параллельно с остальными
+	// 4. Коллектор процессора
 	g.Go(func() error {
 		procData, err := sc.processorColl.Collect()
 		if err != nil {
-			return err
+			return fmt.Errorf("processor collector: %w", err)
 		}
+		mu.Lock()
 		snapshot.Processor = procData
+		mu.Unlock()
 		return nil
 	})
 
-	// 5. Запускаем коллектор оперативной памяти параллельно с остальными
+	// 5. Коллектор оперативной памяти
 	g.Go(func() error {
 		ramData, err := sc.ramColl.Collect()
 		if err != nil {
-			return err
+			return fmt.Errorf("RAM collector: %w", err)
 		}
+		mu.Lock()
 		snapshot.RAM = ramData
+		mu.Unlock()
 		return nil
 	})
 
-	// 6. Запускаем коллектор дисков параллельно с остальными
+	// 6. Коллектор дисков
 	g.Go(func() error {
 		diskData, err := sc.diskColl.Collect()
 		if err != nil {
-			return err
+			return fmt.Errorf("disk collector: %w", err)
 		}
+		mu.Lock()
 		snapshot.Drives = diskData
+		mu.Unlock()
 		return nil
 	})
 
-	// 7. Запускаем коллектор хоста параллельно с остальными
+	// 7. Коллектор хоста
 	g.Go(func() error {
 		hostData, err := sc.hostColl.Collect()
 		if err != nil {
-			return err
+			return fmt.Errorf("host collector: %w", err)
 		}
+		mu.Lock()
 		snapshot.Host = hostData
+		mu.Unlock()
 		return nil
 	})
 
-	// 7. Запускаем коллектор хоста параллельно с остальными
+	// 8. Коллектор пользователя
 	g.Go(func() error {
 		userData, err := sc.userColl.Collect()
 		if err != nil {
-			return err
+			return fmt.Errorf("user collector: %w", err)
 		}
+		mu.Lock()
 		snapshot.User = userData
+		mu.Unlock()
 		return nil
 	})
 
+	// Ждем завершения всех горутин
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
