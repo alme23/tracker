@@ -23,7 +23,7 @@ func main() {
 	}
 
 	// Форматируем результат в JSON для вывода в консоль
-	jsonData, err := json.MarshalIndent(snapshot.Processor, "", "  ")
+	jsonData, err := json.MarshalIndent(snapshot.RAM, "", "  ")
 	if err != nil {
 		log.Fatalf("Ошибка маршалинга JSON: %v", err)
 	}

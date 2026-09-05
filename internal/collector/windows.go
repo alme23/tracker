@@ -1,5 +1,7 @@
 // tracker/internal/collector/windows.go
 
+//go:build windows
+
 package collector
 
 import "syscall"
