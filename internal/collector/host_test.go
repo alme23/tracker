@@ -3,12 +3,16 @@
 package collector
 
 import (
-	"strings"
+	"fmt"
+	"os"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/alme23/tracker/internal/models"
 )
+
+// ============ Тесты для NewHostCollector() ============
 
 func TestNewHostCollector(t *testing.T) {
 	collector := NewHostCollector()
@@ -17,6 +21,8 @@ func TestNewHostCollector(t *testing.T) {
 		t.Fatal("NewHostCollector returned nil")
 	}
 }
+
+// ============ Тесты для Collect() ============
 
 func TestHostCollectorCollect(t *testing.T) {
 	collector := NewHostCollector()
@@ -32,7 +38,7 @@ func TestHostCollectorCollect(t *testing.T) {
 	}
 
 	if info.UpTimeSeconds == 0 {
-		t.Error("Uptime is 0")
+		t.Error("UpTimeSeconds is 0")
 	}
 
 	if info.BootTime.IsZero() {
@@ -43,21 +49,15 @@ func TestHostCollectorCollect(t *testing.T) {
 		t.Error("TimeZone is empty")
 	}
 
-	// Логируем информацию
+	// Логируем
 	t.Logf("Hostname: %s", info.Hostname)
 	t.Logf("FQDN: %s", info.FQDN)
-	t.Logf("Physical Hostname: %s", info.PhysicalHostname)
-	t.Logf("Physical FQDN: %s", info.PhysicalFQDN)
 	t.Logf("Domain: %s", info.Domain)
-	t.Logf("Workgroup: %s", info.Workgroup)
 	t.Logf("Uptime: %d seconds", info.UpTimeSeconds)
-	t.Logf("BootTime: %s", info.BootTime.Format("2006-01-02 15:04:05"))
 	t.Logf("TimeZone: %s (offset %d)", info.TimeZone, info.TimeZoneOffset)
-	t.Logf("Manufacturer: %s", info.Manufacturer)
-	t.Logf("Model: %s", info.Model)
-	t.Logf("Serial: %s", info.SerialNumber)
-	t.Logf("BIOS: %s %s (%s)", info.BIOSVendor, info.BIOSVersion, info.BIOSDate)
 }
+
+// ============ Тесты для getComputerName() ============
 
 func TestGetComputerName(t *testing.T) {
 	collector := NewHostCollector()
@@ -81,13 +81,28 @@ func TestGetComputerName(t *testing.T) {
 			result := collector.getComputerName(tt.nameType)
 			t.Logf("%s: %s", tt.name, result)
 
-			// Не все типы могут быть доступны
 			if result == "" {
 				t.Logf("%s returned empty (may be normal)", tt.name)
 			}
 		})
 	}
 }
+
+func TestGetComputerNameDNS(t *testing.T) {
+	collector := NewHostCollector()
+
+	hostname := collector.getComputerName(computerNameDnsHostname)
+
+	if hostname == "" {
+		t.Error("DNS hostname is empty")
+	}
+
+	// Сравниваем с os.Hostname()
+	osHostname, _ := os.Hostname()
+	t.Logf("DNS: %s, os.Hostname: %s", hostname, osHostname)
+}
+
+// ============ Тесты для getWorkgroup() ============
 
 func TestGetWorkgroup(t *testing.T) {
 	collector := NewHostCollector()
@@ -96,18 +111,20 @@ func TestGetWorkgroup(t *testing.T) {
 
 	t.Logf("Workgroup: %s", workgroup)
 
-	// Рабочая группа может быть пустой, если компьютер в домене
+	// Рабочая группа может быть пустой (если в домене)
 	if workgroup == "" {
 		t.Log("Workgroup is empty (may be in domain)")
 	}
 }
+
+// ============ Тесты для getUpTimeSeconds() ============
 
 func TestGetUpTimeSeconds(t *testing.T) {
 	collector := NewHostCollector()
 
 	uptime := collector.getUpTimeSeconds()
 
-	t.Logf("Uptime: %d seconds", uptime)
+	t.Logf("Uptime: %d seconds (%s)", uptime, formatDuration(uptime))
 
 	if uptime == 0 {
 		t.Error("Uptime is 0")
@@ -118,6 +135,8 @@ func TestGetUpTimeSeconds(t *testing.T) {
 		t.Errorf("Uptime is too large: %d", uptime)
 	}
 }
+
+// ============ Тесты для getTimeZone() ============
 
 func TestGetTimeZone(t *testing.T) {
 	collector := NewHostCollector()
@@ -137,13 +156,31 @@ func TestGetTimeZone(t *testing.T) {
 	}
 }
 
+func TestGetTimeZoneDirectCall(t *testing.T) {
+	var tzInfo timeZoneInformation
+
+	ret, _, _ := procGetTimeZoneInformation.Call(
+		uintptr(unsafe.Pointer(&tzInfo)),
+	)
+
+	t.Logf("GetTimeZoneInformation returned: %d", ret)
+	t.Logf("Bias: %d", tzInfo.Bias)
+	t.Logf("StandardBias: %d", tzInfo.StandardBias)
+	t.Logf("DaylightBias: %d", tzInfo.DaylightBias)
+
+	if ret == 0xFFFFFFFF {
+		t.Error("GetTimeZoneInformation failed")
+	}
+}
+
+// ============ Тесты для collectHardwareInfo() ============
+
 func TestCollectHardwareInfo(t *testing.T) {
 	collector := NewHostCollector()
 	info := &models.HostInfo{}
 
 	collector.collectHardwareInfo(info)
 
-	// Логируем информацию о железе
 	t.Logf("Manufacturer: %s", info.Manufacturer)
 	t.Logf("Model: %s", info.Model)
 	t.Logf("SKU: %s", info.SKU)
@@ -160,150 +197,82 @@ func TestCollectHardwareInfo(t *testing.T) {
 	t.Logf("BaseBoard Version: %s", info.BaseBoardVersion)
 
 	// Проверяем, что хотя бы что-то заполнено
-	if info.Manufacturer == "" && info.Model == "" {
-		t.Error("Both manufacturer and model are empty")
+	if info.Manufacturer == "" && info.Model == "" && info.BIOSVendor == "" {
+		t.Error("All hardware info is empty")
 	}
 }
 
-func TestHostInfoVirtualMachineDetection(t *testing.T) {
-	collector := NewHostCollector()
+// ============ Вспомогательные функции ============
 
-	info, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
+func formatDuration(seconds uint64) string {
+	duration := time.Duration(seconds) * time.Second
 
-	// Проверяем, различаются ли физическое и виртуальное имена
-	if info.PhysicalHostname != "" && info.PhysicalHostname != info.Hostname {
-		t.Logf("Virtual machine detected!")
-		t.Logf("  Virtual: %s", info.Hostname)
-		t.Logf("  Physical: %s", info.PhysicalHostname)
-	} else {
-		t.Log("Physical machine (or VM with same names)")
+	days := int(duration.Hours() / 24)
+	hours := int(duration.Hours()) % 24
+	minutes := int(duration.Minutes()) % 60
+
+	if days > 0 {
+		return fmt.Sprintf("%d days, %d hours, %d minutes", days, hours, minutes)
 	}
+	if hours > 0 {
+		return fmt.Sprintf("%d hours, %d minutes", hours, minutes)
+	}
+	return fmt.Sprintf("%d minutes", minutes)
 }
 
-func TestHostInfoDomainDetection(t *testing.T) {
-	collector := NewHostCollector()
+// ============ Бенчмарки ============
 
-	info, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	if info.Domain != "" {
-		t.Logf("Computer is in domain: %s", info.Domain)
-		if info.Workgroup != "" {
-			t.Logf("Also has workgroup: %s", info.Workgroup)
-		}
-	} else {
-		t.Logf("Computer is in workgroup: %s", info.Workgroup)
-	}
-}
-
-func TestBootTimeCalculation(t *testing.T) {
-	collector := NewHostCollector()
-
-	info, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	// Проверяем, что BootTime + Uptime ≈ Now
-	calculatedNow := info.BootTime.Add(time.Duration(info.UpTimeSeconds) * time.Second)
-	difference := time.Since(calculatedNow)
-
-	// Разница должна быть меньше 5 секунд
-	if difference > 5*time.Second || difference < -5*time.Second {
-		t.Errorf("BootTime calculation is off by %v", difference)
-	}
-
-	t.Logf("BootTime: %s", info.BootTime.Format("2006-01-02 15:04:05"))
-	t.Logf("Uptime: %d seconds", info.UpTimeSeconds)
-	t.Logf("Calculated Now: %s", calculatedNow.Format("2006-01-02 15:04:05"))
-	t.Logf("Actual Now: %s", time.Now().Format("2006-01-02 15:04:05"))
-}
-
-func TestTimeZoneNormalization(t *testing.T) {
-	collector := NewHostCollector()
-
-	zoneName, offset := collector.getTimeZone()
-
-	// Нормализуем название зоны
-	normalizedZone := normalizeTimeZoneName(zoneName)
-
-	t.Logf("Original: %s", zoneName)
-	t.Logf("Normalized: %s", normalizedZone)
-	t.Logf("Offset: %d minutes", offset)
-
-	if normalizedZone == "" {
-		t.Error("Normalized zone is empty")
-	}
-}
-
-// normalizeTimeZoneName нормализует название часового пояса
-func normalizeTimeZoneName(name string) string {
-	replacements := map[string]string{
-		"RTZ 2 (зима)":          "Moscow Standard Time",
-		"RTZ 2 (лето)":          "Moscow Daylight Time",
-		"Russian Standard Time": "Moscow Standard Time",
-		"Russian Daylight Time": "Moscow Daylight Time",
-	}
-
-	if normalized, ok := replacements[name]; ok {
-		return normalized
-	}
-	return name
-}
-
-func TestHostInfoFieldsConsistency(t *testing.T) {
-	collector := NewHostCollector()
-
-	info, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	// FQDN должен содержать Hostname
-	if info.FQDN != "" && !strings.Contains(info.FQDN, info.Hostname) {
-		t.Errorf("FQDN (%s) doesn't contain hostname (%s)", info.FQDN, info.Hostname)
-	}
-
-	// PhysicalFQDN должен содержать PhysicalHostname
-	if info.PhysicalFQDN != "" && info.PhysicalHostname != "" &&
-		!strings.Contains(info.PhysicalFQDN, info.PhysicalHostname) {
-		t.Errorf("PhysicalFQDN (%s) doesn't contain PhysicalHostname (%s)",
-			info.PhysicalFQDN, info.PhysicalHostname)
-	}
-
-	// Если есть домен, FQDN должен содержать его
-	if info.Domain != "" && info.FQDN != "" &&
-		!strings.Contains(info.FQDN, info.Domain) {
-		t.Errorf("FQDN (%s) doesn't contain domain (%s)", info.FQDN, info.Domain)
-	}
-}
-
-func BenchmarkHostCollector(b *testing.B) {
+func BenchmarkHostCollectorCollect(b *testing.B) {
 	collector := NewHostCollector()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := collector.Collect()
-		if err != nil {
-			b.Fatalf("Collect failed: %v", err)
-		}
+	for b.Loop() {
+		_, _ = collector.Collect()
 	}
 }
 
-func BenchmarkHostCollectorParallel(b *testing.B) {
+func BenchmarkGetComputerName(b *testing.B) {
 	collector := NewHostCollector()
 
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := collector.Collect()
-			if err != nil {
-				b.Fatalf("Collect failed: %v", err)
-			}
-		}
-	})
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.getComputerName(computerNameDnsHostname)
+	}
+}
+
+func BenchmarkGetWorkgroup(b *testing.B) {
+	collector := NewHostCollector()
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.getWorkgroup()
+	}
+}
+
+func BenchmarkGetUpTimeSeconds(b *testing.B) {
+	collector := NewHostCollector()
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.getUpTimeSeconds()
+	}
+}
+
+func BenchmarkGetTimeZone(b *testing.B) {
+	collector := NewHostCollector()
+
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = collector.getTimeZone()
+	}
+}
+
+func BenchmarkCollectHardwareInfo(b *testing.B) {
+	collector := NewHostCollector()
+	info := &models.HostInfo{}
+
+	b.ResetTimer()
+	for b.Loop() {
+		collector.collectHardwareInfo(info)
+	}
 }

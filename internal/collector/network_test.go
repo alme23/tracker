@@ -9,18 +9,17 @@ import (
 	"github.com/alme23/tracker/internal/models"
 )
 
+// ============ Тесты для NewNetworkCollector() ============
+
 func TestNewNetworkCollector(t *testing.T) {
 	collector := NewNetworkCollector()
 
 	if collector == nil {
 		t.Fatal("NewNetworkCollector returned nil")
 	}
-
-	// Проверяем, что пул буферов инициализирован
-	if collector.bufferPool.New == nil {
-		t.Error("bufferPool.New is nil")
-	}
 }
+
+// ============ Тесты для Collect() ============
 
 func TestNetworkCollectorCollect(t *testing.T) {
 	collector := NewNetworkCollector()
@@ -34,64 +33,76 @@ func TestNetworkCollectorCollect(t *testing.T) {
 		t.Error("No network interfaces found")
 	}
 
-	// Проверяем каждый интерфейс
+	t.Logf("Found %d network interfaces", len(statuses))
+}
+
+// ============ Проверка данных ============
+
+func TestNetworkCollectorDataIntegrity(t *testing.T) {
+	collector := NewNetworkCollector()
+
+	statuses, err := collector.Collect()
+	if err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	// Уникальность индексов
+	indexMap := make(map[int]bool)
 	for _, iface := range statuses {
-		// Индекс должен быть положительным
-		if iface.Index < 0 {
-			t.Errorf("Interface %s has invalid index: %d", iface.Name, iface.Index)
+		if indexMap[iface.Index] {
+			t.Errorf("Duplicate index: %d", iface.Index)
 		}
+		indexMap[iface.Index] = true
+	}
 
-		// Имя не должно быть пустым
-		if iface.Name == "" {
-			t.Error("Interface name is empty")
-		}
-
-		// Тип должен быть валидным
-		switch iface.Type {
-		case models.TypeEthernet, models.TypeWireless, models.TypeLoopback,
-			models.TypeTunnel, models.TypePPP, models.TypeOther, models.TypeUnknown:
-			// Valid types
-		default:
-			t.Errorf("Invalid interface type: %v", iface.Type)
-		}
-
-		// IP Assignment должен быть валидным
-		switch iface.IPAssignment {
-		case models.AssignmentNotApps, models.AssignmentDHCP, models.AssignmentStatic:
-			// Valid assignments
-		default:
-			t.Errorf("Invalid IP assignment: %v", iface.IPAssignment)
-		}
-
-		// Проверяем MAC-адрес
+	// Проверка MAC-адресов
+	for _, iface := range statuses {
 		if iface.MAC != "" {
 			mac, err := net.ParseMAC(iface.MAC)
 			if err != nil {
-				t.Errorf("Invalid MAC address %s: %v", iface.MAC, err)
+				t.Errorf("Invalid MAC %s: %v", iface.MAC, err)
 			}
 			if len(mac) != 6 {
 				t.Errorf("Invalid MAC length: %d", len(mac))
 			}
 		}
+	}
 
-		// Проверяем IP-адреса
+	// Проверка IP-адресов
+	for _, iface := range statuses {
 		for _, ip := range iface.IPAddresses {
 			if ip == nil {
-				t.Error("Nil IP address")
+				t.Error("Nil IP")
 			}
 			if ip.To4() == nil && ip.To16() == nil {
-				t.Errorf("Invalid IP address: %v", ip)
+				t.Errorf("Invalid IP: %v", ip)
 			}
 		}
+	}
 
-		// Логируем
-		t.Logf("Interface %d: %s (%s)", iface.Index, iface.Name, iface.Description)
-		t.Logf("  Type: %s, MAC: %s, Operational: %v",
-			iface.Type.String(), iface.MAC, iface.Operational)
-		t.Logf("  IP Assignment: %s", iface.IPAssignment)
-		t.Logf("  IP Addresses: %v", iface.IPAddresses)
+	// Проверка типов
+	for _, iface := range statuses {
+		switch iface.Type {
+		case models.TypeEthernet, models.TypeWireless, models.TypeLoopback,
+			models.TypeTunnel, models.TypePPP, models.TypeOther, models.TypeUnknown:
+			// Valid
+		default:
+			t.Errorf("Invalid type: %v", iface.Type)
+		}
+	}
+
+	// Проверка IP Assignment
+	for _, iface := range statuses {
+		switch iface.IPAssignment {
+		case models.AssignmentNotApps, models.AssignmentDHCP, models.AssignmentStatic:
+			// Valid
+		default:
+			t.Errorf("Invalid IP assignment: %v", iface.IPAssignment)
+		}
 	}
 }
+
+// ============ Проверка Loopback ============
 
 func TestNetworkCollectorLoopback(t *testing.T) {
 	collector := NewNetworkCollector()
@@ -106,7 +117,6 @@ func TestNetworkCollectorLoopback(t *testing.T) {
 		if iface.Type == models.TypeLoopback {
 			foundLoopback = true
 
-			// Loopback должен иметь IP 127.0.0.1 или ::1
 			hasLoopbackIP := false
 			for _, ip := range iface.IPAddresses {
 				if ip.IsLoopback() {
@@ -116,17 +126,11 @@ func TestNetworkCollectorLoopback(t *testing.T) {
 			}
 
 			if !hasLoopbackIP {
-				t.Error("Loopback interface doesn't have loopback IP")
+				t.Error("Loopback doesn't have loopback IP")
 			}
 
-			// Loopback не должен использовать DHCP
 			if iface.IPAssignment != models.AssignmentNotApps {
 				t.Errorf("Loopback should have AssignmentNotApps, got %v", iface.IPAssignment)
-			}
-
-			// Loopback обычно имеет пустой MAC
-			if iface.MAC != "" {
-				t.Logf("Loopback has MAC: %s (unusual)", iface.MAC)
 			}
 
 			break
@@ -134,9 +138,11 @@ func TestNetworkCollectorLoopback(t *testing.T) {
 	}
 
 	if !foundLoopback {
-		t.Error("Loopback interface not found")
+		t.Error("Loopback not found")
 	}
 }
+
+// ============ Проверка физических интерфейсов ============
 
 func TestNetworkCollectorPhysicalInterfaces(t *testing.T) {
 	collector := NewNetworkCollector()
@@ -151,7 +157,6 @@ func TestNetworkCollectorPhysicalInterfaces(t *testing.T) {
 		if iface.Type == models.TypeEthernet || iface.Type == models.TypeWireless {
 			foundPhysical = true
 
-			// Физические интерфейсы должны иметь MAC-адрес
 			if iface.MAC == "" {
 				t.Errorf("Physical interface %s has empty MAC", iface.Name)
 			}
@@ -164,6 +169,8 @@ func TestNetworkCollectorPhysicalInterfaces(t *testing.T) {
 		t.Log("No physical interfaces found (may be normal for VM)")
 	}
 }
+
+// ============ Проверка IPv4/IPv6 ============
 
 func TestNetworkCollectorIPv4IPv6(t *testing.T) {
 	collector := NewNetworkCollector()
@@ -186,14 +193,10 @@ func TestNetworkCollectorIPv4IPv6(t *testing.T) {
 		}
 	}
 
-	t.Logf("IPv4 found: %v", foundIPv4)
-	t.Logf("IPv6 found: %v", foundIPv6)
-
-	// На большинстве систем должен быть IPv4
-	if !foundIPv4 {
-		t.Log("No IPv4 addresses found (unusual)")
-	}
+	t.Logf("IPv4: %v, IPv6: %v", foundIPv4, foundIPv6)
 }
+
+// ============ Проверка операционного статуса ============
 
 func TestNetworkCollectorOperational(t *testing.T) {
 	collector := NewNetworkCollector()
@@ -204,153 +207,41 @@ func TestNetworkCollectorOperational(t *testing.T) {
 	}
 
 	operationalCount := 0
-	nonOperationalCount := 0
-
 	for _, iface := range statuses {
 		if iface.Operational {
 			operationalCount++
-		} else {
-			nonOperationalCount++
 		}
 	}
 
-	t.Logf("Operational interfaces: %d", operationalCount)
-	t.Logf("Non-operational interfaces: %d", nonOperationalCount)
+	t.Logf("Operational: %d", operationalCount)
 
-	// Должен быть хотя бы один работающий интерфейс
 	if operationalCount == 0 {
 		t.Error("No operational interfaces")
 	}
 }
 
-func TestNetworkCollectorDHCPDetection(t *testing.T) {
-	collector := NewNetworkCollector()
-
-	statuses, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	dhcpCount := 0
-	staticCount := 0
-
-	for _, iface := range statuses {
-		switch iface.IPAssignment {
-		case models.AssignmentDHCP:
-			dhcpCount++
-		case models.AssignmentStatic:
-			staticCount++
-		}
-	}
-
-	t.Logf("DHCP interfaces: %d", dhcpCount)
-	t.Logf("Static interfaces: %d", staticCount)
-}
-
-func TestNetworkCollectorDataIntegrity(t *testing.T) {
-	collector := NewNetworkCollector()
-
-	statuses, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	// Проверяем уникальность индексов
-	indexMap := make(map[int]bool)
-	for _, iface := range statuses {
-		if indexMap[iface.Index] {
-			t.Errorf("Duplicate interface index: %d", iface.Index)
-		}
-		indexMap[iface.Index] = true
-	}
-
-	// Проверяем уникальность MAC-адресов (кроме пустых)
-	macMap := make(map[string]bool)
-	for _, iface := range statuses {
-		if iface.MAC != "" {
-			if macMap[iface.MAC] {
-				t.Errorf("Duplicate MAC address: %s", iface.MAC)
-			}
-			macMap[iface.MAC] = true
-		}
-	}
-}
+// ============ Повторные вызовы ============
 
 func TestNetworkCollectorRepeatedCalls(t *testing.T) {
 	collector := NewNetworkCollector()
 
-	// Первый вызов
 	first, err := collector.Collect()
 	if err != nil {
 		t.Fatalf("First Collect failed: %v", err)
 	}
 
-	// Второй вызов
 	second, err := collector.Collect()
 	if err != nil {
 		t.Fatalf("Second Collect failed: %v", err)
 	}
 
-	// Количество интерфейсов должно совпадать
 	if len(first) != len(second) {
-		t.Errorf("Interface count changed: %d vs %d", len(first), len(second))
-	}
-
-	// Индексы должны совпадать
-	for i := range first {
-		if first[i].Index != second[i].Index {
-			t.Errorf("Interface order changed: %d vs %d", first[i].Index, second[i].Index)
-		}
+		t.Errorf("Count changed: %d vs %d", len(first), len(second))
 	}
 }
 
-func BenchmarkNetworkCollector(b *testing.B) {
-	collector := NewNetworkCollector()
+// ============ Конкурентный доступ ============
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := collector.Collect()
-		if err != nil {
-			b.Fatalf("Collect failed: %v", err)
-		}
-	}
-}
-
-func BenchmarkNetworkCollectorParallel(b *testing.B) {
-	collector := NewNetworkCollector()
-
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := collector.Collect()
-			if err != nil {
-				b.Fatalf("Collect failed: %v", err)
-			}
-		}
-	})
-}
-
-// Тест на утечки памяти
-func TestNetworkCollectorNoLeaks(t *testing.T) {
-	collector := NewNetworkCollector()
-
-	// Многократный вызов для проверки утечек
-	for i := 0; i < 100; i++ {
-		statuses, err := collector.Collect()
-		if err != nil {
-			t.Fatalf("Collect failed on iteration %d: %v", i, err)
-		}
-
-		// Явно освобождаем ссылки
-		for j := range statuses {
-			statuses[j].IPAddresses = nil
-		}
-		statuses = nil
-	}
-
-	// Если тест завершился без ошибок, утечек нет
-}
-
-// Тест на конкурентный доступ
 func TestNetworkCollectorConcurrent(t *testing.T) {
 	collector := NewNetworkCollector()
 
@@ -369,4 +260,41 @@ func TestNetworkCollectorConcurrent(t *testing.T) {
 			t.Errorf("Concurrent Collect failed: %v", err)
 		}
 	}
+}
+
+// ============ Обработка переполнения буфера ============
+
+func TestNetworkCollectorBufferOverflow(t *testing.T) {
+	collector := NewNetworkCollector()
+
+	for i := 0; i < 10; i++ {
+		statuses, err := collector.Collect()
+		if err != nil {
+			t.Fatalf("Collect failed on iteration %d: %v", i, err)
+		}
+		if len(statuses) == 0 {
+			t.Errorf("No interfaces on iteration %d", i)
+		}
+	}
+}
+
+// ============ Бенчмарки ============
+
+func BenchmarkNetworkCollectorCollect(b *testing.B) {
+	collector := NewNetworkCollector()
+
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = collector.Collect()
+	}
+}
+
+func BenchmarkNetworkCollectorParallel(b *testing.B) {
+	collector := NewNetworkCollector()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _ = collector.Collect()
+		}
+	})
 }

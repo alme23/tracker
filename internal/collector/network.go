@@ -5,9 +5,9 @@
 package collector
 
 import (
+	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"syscall"
 	"unsafe"
 
@@ -15,65 +15,53 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type NetworkCollector struct {
-	// Пул буферов для переиспользования памяти
-	bufferPool sync.Pool
-}
+type NetworkCollector struct{}
 
 func NewNetworkCollector() *NetworkCollector {
-	return &NetworkCollector{
-		bufferPool: sync.Pool{
-			New: func() interface{} {
-				buf := make([]byte, 15000)
-				return &buf
-			},
-		},
-	}
+	return &NetworkCollector{}
 }
 
 func (c *NetworkCollector) Collect() (models.NetworkStatuses, error) {
 	flags := uint32(windows.GAA_FLAG_INCLUDE_PREFIX)
 
-	// Получаем буфер из пула
-	bufPtr := c.bufferPool.Get().(*[]byte)
-	buf := *bufPtr
-	defer func() {
-		*bufPtr = buf[:0]
-		c.bufferPool.Put(bufPtr)
-	}()
+	size := uint32(15000)
+	var buf []byte
 
-	// Убеждаемся, что буфер достаточно большой
-	if cap(buf) < 15000 {
-		buf = make([]byte, 15000)
-	} else {
-		buf = buf[:cap(buf)]
-	}
-
-	size := uint32(len(buf))
-
+	const maxAttempts = 5
 	var err error
-	for {
+
+	for range maxAttempts {
+		buf = make([]byte, size)
+
 		err = windows.GetAdaptersAddresses(
 			syscall.AF_UNSPEC,
 			flags,
 			0,
-			(*windows.IpAdapterAddresses)(unsafe.Pointer(&buf[0])),
+			// Безопасный способ получить указатель на базовый массив слайса без риска panic
+			(*windows.IpAdapterAddresses)(unsafe.Pointer(unsafe.SliceData(buf))),
 			&size,
 		)
 		if err == nil {
 			break
 		}
-		if err != windows.ERROR_BUFFER_OVERFLOW {
-			return nil, fmt.Errorf("ошибка WinAPI GetAdaptersAddresses: %v", err)
+		if !errors.Is(err, windows.ERROR_BUFFER_OVERFLOW) {
+			return nil, fmt.Errorf("ошибка WinAPI GetAdaptersAddresses: %w", err)
 		}
-		// Увеличиваем буфер
-		buf = make([]byte, size)
 	}
 
-	// Предварительно выделяем результат (обычно 4-8 адаптеров)
+	if err != nil {
+		return nil, fmt.Errorf("превышено количество попыток выделения буфера GetAdaptersAddresses: %w", err)
+	}
+
+	// Если буфер по какой-то причине пуст, прерываемся во избежание паники
+	if len(buf) == 0 {
+		return nil, fmt.Errorf("получен пустой буфер адресов адаптеров")
+	}
+
 	result := make(models.NetworkStatuses, 0, 8)
 
-	adapter := (*windows.IpAdapterAddresses)(unsafe.Pointer(&buf[0]))
+	// Используем безопасный указатель на данные слайса
+	adapter := (*windows.IpAdapterAddresses)(unsafe.Pointer(unsafe.SliceData(buf)))
 	for adapter != nil {
 		info := models.InterfaceInfo{
 			Index:       int(adapter.IfIndex),
@@ -99,7 +87,7 @@ func (c *NetworkCollector) Collect() (models.NetworkStatuses, error) {
 		}
 
 		// MAC-адрес
-		if adapter.PhysicalAddressLength > 0 {
+		if adapter.PhysicalAddressLength > 0 && adapter.PhysicalAddressLength <= uint32(len(adapter.PhysicalAddress)) {
 			info.MAC = net.HardwareAddr(adapter.PhysicalAddress[:adapter.PhysicalAddressLength]).String()
 		}
 

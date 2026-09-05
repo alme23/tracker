@@ -1,7 +1,10 @@
 // tracker/internal/models/disk.go
 package models
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // DriveType — легкий тип (1 байт) для хранения физического типа диска
 type DriveType uint8
@@ -18,6 +21,8 @@ const (
 
 func (t DriveType) String() string {
 	switch t {
+	case DriveUnknown:
+		return "UNKNOWN"
 	case DriveNoRootDir:
 		return "NO_ROOT_DIR"
 	case DriveRemovable:
@@ -72,8 +77,29 @@ type DriveInfo struct {
 	FreeBytes    uint64    `json:"free_bytes"`    // Свободный объем в байтах
 	UsedBytes    uint64    `json:"used_bytes"`    // Использованный объем
 	VolumeName   string    `json:"volume_name"`   // Метка тома
-	SerialNumber string    `json:"serial_number"` // Серийный номер
+	SerialNumber uint32    `json:"serial_number"` // Серийный номер
 	IsReady      bool      `json:"is_ready"`      // Готов ли диск
+}
+
+// GetSerialNumberString возвращает серийный номер в формате "XXXX-XXXX"
+func (d *DriveInfo) GetSerialNumberString() string {
+	if d.SerialNumber == 0 {
+		return ""
+	}
+
+	// Формат: XXXX-XXXX
+	return fmt.Sprintf("%04X-%04X",
+		(d.SerialNumber>>16)&0xFFFF,
+		d.SerialNumber&0xFFFF)
+}
+
+// GetSerialNumberHex возвращает серийный номер в шестнадцатеричном формате
+func (d *DriveInfo) GetSerialNumberHex() string {
+	if d.SerialNumber == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("%08X", d.SerialNumber)
 }
 
 type DiskStatuses []DriveInfo

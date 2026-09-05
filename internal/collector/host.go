@@ -84,19 +84,22 @@ func (c *HostCollector) Collect() (models.HostInfo, error) {
 
 // getComputerName получает имя компьютера
 func (c *HostCollector) getComputerName(nameType uint32) string {
+	// Исправлено: переменная size должна объявляться строго ВНУТРИ метода,
+	// так как WinAPI перезаписывает её значение (делает её меньше).
 	var size uint32 = 256
 	buffer := make([]uint16, size)
 
 	ret, _, _ := procGetComputerNameEx.Call(
 		uintptr(nameType),
-		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(unsafe.Pointer(unsafe.SliceData(buffer))),
 		uintptr(unsafe.Pointer(&size)),
 	)
 
-	if ret == 0 {
+	if ret == 0 || size == 0 {
 		return ""
 	}
 
+	// Читаем строго до размера size, который вернула Windows
 	return syscall.UTF16ToString(buffer[:size])
 }
 
@@ -110,7 +113,9 @@ func (c *HostCollector) getWorkgroup() string {
 	if err != nil {
 		return ""
 	}
-	defer k.Close()
+	defer func() {
+		_ = k.Close()
+	}()
 
 	if workgroup, _, err := k.GetStringValue("Domain"); err == nil {
 		return workgroup
@@ -131,27 +136,36 @@ func (c *HostCollector) getUpTimeSeconds() uint64 {
 }
 
 // getTimeZone получает информацию о часовом поясе
-func (c *HostCollector) getTimeZone() (string, int16) {
+func (c *HostCollector) getTimeZone() (name string, offsetMinutes int16) {
 	var tzInfo timeZoneInformation
 
 	ret, _, _ := procGetTimeZoneInformation.Call(
 		uintptr(unsafe.Pointer(&tzInfo)),
 	)
 
-	if ret == 0xFFFFFFFF { // TIME_ZONE_ID_INVALID
+	// TIME_ZONE_ID_INVALID
+	if ret == 0xFFFFFFFF || int32(ret) == -1 {
 		return "UTC", 0
 	}
 
-	// Bias - это смещение в минутах (UTC = local + bias)
-	offsetMinutes := -int16(tzInfo.Bias)
+	currentBias := tzInfo.Bias
+	var zoneName string
 
-	zoneName := ""
-	if ret == 2 { // TIME_ZONE_ID_DAYLIGHT
+	// Идиоматичный tagged switch
+	switch ret {
+	case 2: // TIME_ZONE_ID_DAYLIGHT
+		currentBias += tzInfo.DaylightBias
 		zoneName = syscall.UTF16ToString(tzInfo.DaylightName[:])
-	} else {
+
+	case 1: // TIME_ZONE_ID_STANDARD
+		currentBias += tzInfo.StandardBias
+		zoneName = syscall.UTF16ToString(tzInfo.StandardName[:])
+
+	default: // TIME_ZONE_ID_UNKNOWN (0) или любые другие состояния
 		zoneName = syscall.UTF16ToString(tzInfo.StandardName[:])
 	}
 
+	offsetMinutes = -int16(currentBias)
 	return zoneName, offsetMinutes
 }
 
@@ -165,7 +179,9 @@ func (c *HostCollector) collectHardwareInfo(info *models.HostInfo) {
 	if err != nil {
 		return
 	}
-	defer k.Close()
+	defer func() {
+		_ = k.Close()
+	}()
 
 	// Системная информация
 	if manufacturer, _, err := k.GetStringValue("SystemManufacturer"); err == nil {

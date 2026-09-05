@@ -32,4 +32,9 @@ go.work.sum
 # .vscode/
 
 AGENT.md
+
+# Skip real data
 *.json
+
+# Skip linters result
+*.txt

@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -14,7 +15,7 @@ type OSInfo struct {
 	KernelVersion    string         `json:"kernel_version"`
 	Architecture     ArchFamilyType `json:"architecture"`
 	Locale           string         `json:"locale"`
-	InstallDate      string         `json:"install_date"`
+	InstallDate      int64          `json:"install_date"`
 	InstallationType string         `json:"installation_type"`
 	PowerShellVer    string         `json:"powershell_version"`
 	SecureBootLines  bool           `json:"secure_boot"`
@@ -24,6 +25,22 @@ type OSInfo struct {
 	RegisteredOrg    string         `json:"registered_organization"`
 	IsVirtual        bool           `json:"is_virtual"`
 	IsHypervisor     bool           `json:"is_hypervisor"`
+}
+
+// GetInstallDateString возвращает дату установки в формате "YYYY-MM-DD"
+func (o *OSInfo) GetInstallDateString() string {
+	if o.InstallDate == 0 {
+		return "UNKNOWN"
+	}
+	return time.Unix(o.InstallDate, 0).Format("2006-01-02")
+}
+
+// GetInstallDateTime возвращает дату установки как time.Time
+func (o *OSInfo) GetInstallDateTime() time.Time {
+	if o.InstallDate == 0 {
+		return time.Time{}
+	}
+	return time.Unix(o.InstallDate, 0)
 }
 
 // BinaryUUID представляет собой ультра-легкие 16 байт памяти для хранения UUID
@@ -76,6 +93,8 @@ const (
 
 func (a ArchFamilyType) String() string {
 	switch a {
+	case UnknownArch:
+		return "UNKNOWN"
 	case AMD64:
 		return "AMD64"
 	case ARM:

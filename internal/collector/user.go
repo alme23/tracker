@@ -120,7 +120,9 @@ func (c *UserCollector) getDomainFromRegistry() string {
 	if err != nil {
 		return ""
 	}
-	defer k.Close()
+	defer func() {
+		_ = k.Close()
+	}()
 
 	if domain, _, err := k.GetStringValue("Domain"); err == nil && domain != "" {
 		return domain
@@ -143,7 +145,9 @@ func (c *UserCollector) getWorkgroup() string {
 	if err != nil {
 		return ""
 	}
-	defer k.Close()
+	defer func() {
+		_ = k.Close()
+	}()
 
 	if workgroup, _, err := k.GetStringValue("Domain"); err == nil && workgroup != "" {
 		return workgroup

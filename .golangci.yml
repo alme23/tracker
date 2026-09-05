@@ -1,0 +1,97 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: false
+
+linters:
+  default: none
+  enable:
+    - errcheck
+#    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocritic
+    - gosec
+    - misspell
+    - prealloc
+    - bodyclose
+    - noctx
+    - goconst
+    # Added
+    - asasalint
+    - asciicheck
+    - bidichk
+    - canonicalheader
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - gocyclo
+    - decorder
+    - depguard
+    - dogsled
+    - dupl
+    - durationcheck
+    - embeddedstructfieldcheck
+    - err113
+    - errchkjson
+    - errname
+    - errorlint
+    - exhaustive
+#    - exhaustruct
+    - exptostd
+    - fatcontext
+    - funcorder
+    - funlen
+    - grouper
+    - iface
+    - makezero
+#    - mnd
+    - modernize
+    - nilerr
+    - reassign
+    - revive
+    - whitespace
+
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - hugeParam         # Отключаем, так как интерфейс требует DomainConfig по значению
+        - commentedOutCode  # Отключаем, если много ложных срабатываний
+
+    gosec:
+      excludes:
+        - G104
+
+    depguard:
+      rules:
+        main:
+          list-mode: lax
+          allow:
+            - $gostd
+            - github.com/alme23/phonebook/internal/
+
+  exclusions:
+    paths:
+      - example
+    rules:
+      - linters:
+          - goconst
+          - gosec
+          - gocritic
+          - exhaustruct
+          - err113
+        path: _test\.go
+      - linters:
+          - gosec
+        path: example/*
+
+formatters:
+  enable:
+    - gofmt

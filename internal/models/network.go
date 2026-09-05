@@ -19,6 +19,8 @@ const (
 // String возвращает текстовое представление (полезно для логов или printf)
 func (a IPAssignment) String() string {
 	switch a {
+	case AssignmentUnknown:
+		return "UNKNOWN"
 	case AssignmentDHCP:
 		return "DHCP"
 	case AssignmentStatic:
@@ -71,6 +73,8 @@ const (
 // String возвращает тип интерфейса в UPPERCASE-стиле
 func (t InterfaceType) String() string {
 	switch t {
+	case TypeUnknown:
+		return "UNKNOWN"
 	case TypeEthernet:
 		return "ETHERNET"
 	case TypeWireless:

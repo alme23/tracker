@@ -396,7 +396,7 @@ func BenchmarkCollectAll(b *testing.B) {
 	collector := NewSystemCollector(2 * time.Second)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := collector.CollectAll()
 		if err != nil {
 			b.Fatalf("CollectAll failed: %v", err)

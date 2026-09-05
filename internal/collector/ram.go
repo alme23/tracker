@@ -43,7 +43,7 @@ func (c *RAMCollector) Collect() (models.RAMInfo, error) {
 	// 2. Делаем прямой низкоуровневый вызов к ядру ОС (работает мгновенно)
 	ret, _, err := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&memStatus)))
 	if ret == 0 {
-		return info, fmt.Errorf("ошибка вызова WinAPI GlobalMemoryStatusEx: %v", err)
+		return info, fmt.Errorf("ошибка вызова WinAPI GlobalMemoryStatusEx: %w", err)
 	}
 
 	// 3. Записываем чистые сырые данные в байтах напрямую в модель без деления и округлений

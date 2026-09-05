@@ -281,7 +281,7 @@ func BenchmarkRAMCollector(b *testing.B) {
 	collector := NewRAMCollector()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := collector.Collect()
 		if err != nil {
 			b.Fatalf("Collect failed: %v", err)

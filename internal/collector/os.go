@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -158,7 +159,6 @@ const (
 )
 
 // RTL_OSVERSIONINFOEXW структура для RtlGetVersion
-// RTL_OSVERSIONINFOEXW структура
 type rtlOSVersionInfoEx struct {
 	OSVersionInfoSize uint32
 	MajorVersion      uint32
@@ -289,16 +289,16 @@ func (c *OSCollector) getOSDetails() osDetails {
 		installationType: "UNKNOWN",
 	}
 
-	// Получаем версию через RtlGetVersion
-	major, minor, build := c.getWindowsVersionNumbers()
+	// Получаем версию через RtlGetVersion (теперь 4 значения)
+	major, minor, build, _ := c.getWindowsVersionNumbers()
 	d.buildNumber = fmt.Sprintf("%d", build)
 	d.kernelVersion = fmt.Sprintf("%d.%d.%d", major, minor, build)
 
-	// Получаем название Windows
+	// Получаем точное название Windows на основе мажорных версий и билдов
 	d.name = c.getWindowsVersionName(major, minor, build)
 
 	// Открываем реестр один раз
-	k, err := registry.OpenKey(
+	regKey, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
 		`SOFTWARE\Microsoft\Windows NT\CurrentVersion`,
 		registry.QUERY_VALUE,
@@ -306,44 +306,49 @@ func (c *OSCollector) getOSDetails() osDetails {
 	if err != nil {
 		return d
 	}
-	defer k.Close()
+	defer func() {
+		_ = regKey.Close()
+	}()
 
-	// Читаем данные из реестра
-	if productName, _, err := k.GetStringValue("ProductName"); err == nil {
-		if strings.Contains(productName, "Server") {
+	// Читаем данные из реестра.
+	// ProductName больше не перезаписывает d.name безусловно, так как в Win11/Server22+ реестр врет!
+	if productName, _, err := regKey.GetStringValue("ProductName"); err == nil {
+		// Используем как запасной вариант, только если базовый маппинг не справился
+		if strings.HasPrefix(d.name, "Windows ") && strings.Contains(d.name, fmt.Sprintf("%d.%d", major, minor)) {
 			d.name = productName
 		}
 	}
 
-	if displayVer, _, err := k.GetStringValue("DisplayVersion"); err == nil && displayVer != "" {
+	// Добавляем версию релиза (например, 23H2, 24H2) к названию
+	if displayVer, _, err := regKey.GetStringValue("DisplayVersion"); err == nil && displayVer != "" {
 		d.displayVersion = displayVer
-		if !strings.Contains(d.name, displayVer) {
+		if !strings.Contains(strings.ToLower(d.name), strings.ToLower(displayVer)) {
 			d.name = fmt.Sprintf("%s %s", d.name, displayVer)
 		}
 	}
 
-	if productID, _, err := k.GetStringValue("ProductID"); err == nil {
+	if productID, _, err := regKey.GetStringValue("ProductID"); err == nil {
 		d.productID = productID
 	}
 
-	if owner, _, err := k.GetStringValue("RegisteredOwner"); err == nil {
+	if owner, _, err := regKey.GetStringValue("RegisteredOwner"); err == nil {
 		d.registeredOwner = owner
 	}
 
-	if org, _, err := k.GetStringValue("RegisteredOrganization"); err == nil {
+	if org, _, err := regKey.GetStringValue("RegisteredOrganization"); err == nil {
 		d.registeredOrg = org
 	}
 
-	if installType, _, err := k.GetStringValue("InstallationType"); err == nil {
+	if installType, _, err := regKey.GetStringValue("InstallationType"); err == nil {
 		d.installationType = installType
 	}
 
-	// Получаем редакцию через GetProductInfo
+	// Получаем редакцию через GetProductInfo (с нашей исправленной валидацией ret == 0)
 	d.edition = c.getEditionFromAPI(major, minor)
 
 	// Если не удалось через API, пробуем из реестра
-	if d.edition == "UNKNOWN" {
-		if edition, _, err := k.GetStringValue("EditionID"); err == nil {
+	if d.edition == "UNKNOWN" || d.edition == "PRODUCT_UNDEFINED" {
+		if edition, _, err := regKey.GetStringValue("EditionID"); err == nil {
 			d.edition = edition
 		}
 	}
@@ -352,7 +357,7 @@ func (c *OSCollector) getOSDetails() osDetails {
 }
 
 // getWindowsVersionNumbers получает версию Windows через RtlGetVersion
-func (c *OSCollector) getWindowsVersionNumbers() (uint32, uint32, uint32) {
+func (c *OSCollector) getWindowsVersionNumbers() (major, minor, build uint32, isServer bool) {
 	var versionInfo rtlOSVersionInfoEx
 	versionInfo.OSVersionInfoSize = uint32(unsafe.Sizeof(versionInfo))
 
@@ -361,50 +366,112 @@ func (c *OSCollector) getWindowsVersionNumbers() (uint32, uint32, uint32) {
 	)
 
 	if ret == 0 {
-		return versionInfo.MajorVersion, versionInfo.MinorVersion, versionInfo.BuildNumber
+		// VER_NT_WORKSTATION (1) — это обычная десктопная Windows
+		// VER_NT_DOMAIN_CONTROLLER (2) и VER_NT_SERVER (3) — сервера
+		isServer = versionInfo.ProductType != 1
+		return versionInfo.MajorVersion, versionInfo.MinorVersion, versionInfo.BuildNumber, isServer
 	}
 
-	return 10, 0, 0
+	return 10, 0, 0, false
 }
 
 // getWindowsVersionName возвращает название Windows
 func (c *OSCollector) getWindowsVersionName(major, minor, build uint32) string {
-	switch {
-	case major == 10 && minor == 0 && build >= 22000:
-		return "Windows 11"
-	case major == 10 && minor == 0:
-		return "Windows 10"
-	case major == 6 && minor == 3:
-		return "Windows 8.1"
-	case major == 6 && minor == 2:
-		return "Windows 8"
-	case major == 6 && minor == 1:
-		return "Windows 7"
-	case major == 6 && minor == 0:
-		return "Windows Vista"
-	case major == 5 && minor == 1:
-		return "Windows XP"
-	case major == 5 && minor == 0:
-		return "Windows 2000"
-	default:
-		return fmt.Sprintf("Windows %d.%d", major, minor)
+	// Получаем информацию о сервере
+	_, _, _, isServer := c.getWindowsVersionNumbers()
+
+	// Сначала обрабатываем главную мажорную ветку
+	switch major {
+	case 10:
+		if minor == 0 {
+			if build >= 22000 {
+				// Windows 11 или Windows Server 2022+
+				if isServer {
+					if build >= 26100 {
+						return "Windows Server 2025"
+					}
+					return "Windows Server 2022"
+				}
+				return "Windows 11"
+			}
+			// Windows 10 или Windows Server 2016/2019
+			if isServer {
+				if build >= 17763 {
+					return "Windows Server 2019"
+				}
+				return "Windows Server 2016"
+			}
+			return "Windows 10"
+		}
+	case 6:
+		switch minor {
+		case 3:
+			if isServer {
+				return "Windows Server 2012 R2"
+			}
+			return "Windows 8.1"
+		case 2:
+			if isServer {
+				return "Windows Server 2012"
+			}
+			return "Windows 8"
+		case 1:
+			if isServer {
+				return "Windows Server 2008 R2"
+			}
+			return "Windows 7"
+		case 0:
+			if isServer {
+				return "Windows Server 2008"
+			}
+			return "Windows Vista"
+		}
+	case 5:
+		switch minor {
+		case 2:
+			if isServer {
+				return "Windows Server 2003"
+			}
+			return "Windows XP x64"
+		case 1:
+			return "Windows XP"
+		case 0:
+			if isServer {
+				return "Windows 2000 Server"
+			}
+			return "Windows 2000"
+		}
 	}
+
+	// Дефолтный вариант для серверов или новых версий
+	if isServer {
+		return fmt.Sprintf("Windows Server %d.%d", major, minor)
+	}
+	return fmt.Sprintf("Windows %d.%d", major, minor)
 }
 
 // getEditionFromAPI получает редакцию через GetProductInfo
 func (c *OSCollector) getEditionFromAPI(major, minor uint32) string {
 	var returnedType uint32
 
+	// Обратите внимание: GetProductInfo принимает DWORD (uint32).
+	// Мы передаем 0, 0 в качестве Service Pack major/minor, как требует API для актуальных ОС.
 	ret, _, _ := procGetProductInfo.Call(
 		uintptr(major),
 		uintptr(minor),
-		uintptr(0),
-		uintptr(0),
+		0,
+		0,
 		uintptr(unsafe.Pointer(&returnedType)),
 	)
 
+	// Если возвращен 0 (FALSE), значит вызов функции WinAPI завершился ошибкой
 	if ret == 0 {
 		return "UNKNOWN"
+	}
+
+	// Дополнительная защита: если функция вернула TRUE, но тип продукта PRODUCT_UNDEFINED (0x00000000)
+	if returnedType == 0 {
+		return "PRODUCT_UNDEFINED"
 	}
 
 	return c.getEditionName(returnedType)
@@ -558,74 +625,142 @@ func (c *OSCollector) getEditionName(productType uint32) string {
 	return fmt.Sprintf("Edition 0x%X", productType)
 }
 
-// getSystemLocale вычитывает код языка установки ОС
+// getSystemLocale вычитывает код языка установки ОС напрямую через WinAPI
 func (c *OSCollector) getSystemLocale() string {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Nls\Language`, registry.QUERY_VALUE)
-	if err != nil {
-		return "UNKNOWN"
-	}
-	defer k.Close()
+	// Максимальная длина имени локали в Windows (LOCALE_NAME_MAX_LENGTH = 85)
+	const localeNameMaxLength = 85
+	buf := make([]uint16, localeNameMaxLength)
 
-	langHex, _, err := k.GetStringValue("InstallLanguage")
-	if err != nil {
-		return "UNKNOWN"
+	ret, _, _ := procGetSystemDefaultLocaleName.Call(
+		uintptr(unsafe.Pointer(unsafe.SliceData(buf))),
+		uintptr(localeNameMaxLength),
+	)
+
+	// Если функция вернула длину строки (> 0), преобразуем UTF-16 в Go-строку
+	if ret > 0 {
+		return syscall.UTF16ToString(buf)
 	}
 
-	switch langHex {
-	case "0419":
-		return "ru-RU"
-	case "0409":
-		return "en-US"
-	case "0410":
-		return "it-IT"
-	case "0407":
-		return "de-DE"
-	default:
-		return fmt.Sprintf("LCID-%s", langHex)
-	}
+	// Резервный вариант, если WinAPI сбойнул
+	return "UNKNOWN"
 }
 
-// getInstallDate возвращает дату установки Windows
-func (c *OSCollector) getInstallDate() string {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion`, registry.QUERY_VALUE)
-	if err != nil {
-		return "UNKNOWN"
-	}
-	defer k.Close()
-
-	val, _, err := k.GetIntegerValue("InstallDate")
-	if err != nil {
-		return "UNKNOWN"
+// getInstallDate возвращает дату установки Windows как Unix timestamp
+func (c *OSCollector) getInstallDate() int64 {
+	// Список ключей от самого надежного до текущего
+	paths := []string{
+		`SOFTWARE\Microsoft\Windows NT\CurrentVersion\Source OS (Updated on)`,
+		`SOFTWARE\Microsoft\Windows NT\CurrentVersion\Source OS`,
+		`SOFTWARE\Microsoft\Windows NT\CurrentVersion`,
 	}
 
-	t := time.Unix(int64(val), 0)
-	return t.Format("2006-01-02")
+	for _, path := range paths {
+		if val := c.readInstallTimestamp(path); val > 0 {
+			return int64(val)
+		}
+	}
+
+	return 0
 }
 
-// getPowerShellVersion возвращает версию PowerShell
+// readInstallTimestamp читает timestamp из реестра
+func (c *OSCollector) readInstallTimestamp(path string) uint64 {
+	regKey, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
+	if err != nil {
+		return 0
+	}
+	defer func() {
+		_ = regKey.Close()
+	}()
+
+	val, _, err := regKey.GetIntegerValue("InstallDate")
+	if err != nil {
+		return 0
+	}
+	return val
+}
+
+// getPowerShellVersion возвращает версию PowerShell (сначала ищет Core 7+, затем 3+, затем 1-2)
 func (c *OSCollector) getPowerShellVersion() string {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\PowerShell\3\PowerShellEngine`, registry.QUERY_VALUE)
-	if err != nil {
-		return "UNKNOWN"
+	// 1. Проверяем современный PowerShell 6/7+ (Core)
+	if ver := c.readPSVersion(`SOFTWARE\Microsoft\PowerShellCore\InstalledVersions`, "SemanticVersion"); ver != "" {
+		return "Core " + ver
 	}
-	defer k.Close()
 
-	ver, _, err := k.GetStringValue("PowerShellVersion")
+	// 2. Проверяем встроенный Windows PowerShell 3.0 - 5.1
+	if ver := c.readPSVersion(`SOFTWARE\Microsoft\PowerShell\3\PowerShellEngine`, "PowerShellVersion"); ver != "" {
+		return ver
+	}
+
+	// 3. Проверяем старый встроенный Windows PowerShell 1.0 - 2.0
+	if ver := c.readPSVersion(`SOFTWARE\Microsoft\PowerShell\1\PowerShellEngine`, "PowerShellVersion"); ver != "" {
+		return ver
+	}
+
+	return "UNKNOWN"
+}
+
+// Вспомогательный неэкспортируемый метод для чистоты кода и защиты от дублирования defer
+func (c *OSCollector) readPSVersion(path, valueName string) string {
+	regKey, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
 	if err != nil {
-		return "UNKNOWN"
+		return ""
+	}
+	defer func() {
+		_ = regKey.Close()
+	}()
+
+	ver, _, err := regKey.GetStringValue(valueName)
+	if err != nil {
+		return ""
 	}
 	return ver
 }
 
-// isSecureBootEnabled проверяет статус Secure Boot
+// isSecureBootEnabled проверяет статус Secure Boot напрямую через UEFI
 func (c *OSCollector) isSecureBootEnabled() bool {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\SecureBoot\State`, registry.QUERY_VALUE)
+	// Имя переменной UEFI для SecureBoot
+	namePtr, err := syscall.UTF16PtrFromString("SecureBoot")
 	if err != nil {
 		return false
 	}
-	defer k.Close()
 
-	val, _, err := k.GetIntegerValue("UEFISecureBootEnabled")
+	// GUID пространства имен UEFI для глобальных переменных
+	guidPtr, err := syscall.UTF16PtrFromString("{8be4df61-93ca-11d2-aa0d-00e098032b8c}")
+	if err != nil {
+		return false
+	}
+
+	// Буфер для ответа (SecureBoot возвращает 1 байт: 1 - включен, 0 - выключен)
+	var buffer byte
+
+	ret, _, _ := procGetFirmwareEnvironmentVariable.Call(
+		uintptr(unsafe.Pointer(namePtr)),
+		uintptr(unsafe.Pointer(guidPtr)),
+		uintptr(unsafe.Pointer(&buffer)),
+		1, // Размер буфера в байтах
+	)
+
+	// Если функция вернула больше 0, значит переменная успешно прочитана
+	if ret > 0 {
+		return buffer == 1
+	}
+
+	// Резервный вариант: если к UEFI нет прямого доступа, откатываемся на ваш проверенный код с реестром
+	return c.isSecureBootEnabledFromRegistry()
+}
+
+// Ваш текущий код как резервный метод
+func (c *OSCollector) isSecureBootEnabledFromRegistry() bool {
+	regKey, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\SecureBoot\State`, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_ = regKey.Close()
+	}()
+
+	val, _, err := regKey.GetIntegerValue("UEFISecureBootEnabled")
 	if err != nil {
 		return false
 	}
@@ -634,22 +769,22 @@ func (c *OSCollector) isSecureBootEnabled() bool {
 
 // getMachineGUID возвращает уникальный UUID ОС
 func (c *OSCollector) getMachineGUID() models.BinaryUUID {
-	var defaultUUID models.BinaryUUID
-
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Cryptography`, registry.QUERY_VALUE)
+	regKey, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Cryptography`, registry.QUERY_VALUE)
 	if err != nil {
-		return defaultUUID
+		return models.BinaryUUID{} // Идиоматичный возврат нулевого значения
 	}
-	defer k.Close()
+	defer func() {
+		_ = regKey.Close()
+	}()
 
-	guidStr, _, err := k.GetStringValue("MachineGuid")
+	guidStr, _, err := regKey.GetStringValue("MachineGuid")
 	if err != nil {
-		return defaultUUID
+		return models.BinaryUUID{}
 	}
 
 	parsed, err := uuid.Parse(guidStr)
 	if err != nil {
-		return defaultUUID
+		return models.BinaryUUID{}
 	}
 
 	return models.BinaryUUID(parsed)
@@ -657,26 +792,38 @@ func (c *OSCollector) getMachineGUID() models.BinaryUUID {
 
 // checkVirtualization определяет, запущена ли ОС на виртуальной машине
 func (c *OSCollector) checkVirtualization() bool {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System`, registry.QUERY_VALUE)
+	regKey, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System`, registry.QUERY_VALUE)
 	if err != nil {
 		return false
 	}
-	defer k.Close()
+	defer func() {
+		_ = regKey.Close()
+	}()
 
-	if val, _, err := k.GetIntegerValue("HypervisorPresent"); err == nil && val == 1 {
+	// 1. Проверяем флаг гипервизора от процессора/ОС
+	if val, _, err := regKey.GetIntegerValue("HypervisorPresent"); err == nil && val == 1 {
 		return true
 	}
 
-	biosVendor, _, _ := k.GetStringValue("SystemBiosVersion")
-
-	vmIndicators := []string{
-		"VMware", "VirtualBox", "QEMU", "Xen",
-		"Hyper-V", "KVM", "Parallels", "Virtual Machine",
+	// 2. Исправлено: SystemBiosVersion — это REG_MULTI_SZ, читаем как срез строк
+	biosVersions, _, err := regKey.GetStringsValue("SystemBiosVersion")
+	if err != nil {
+		return false
 	}
 
-	for _, indicator := range vmIndicators {
-		if strings.Contains(strings.ToLower(biosVendor), strings.ToLower(indicator)) {
-			return true
+	// Оптимизация: индикаторы сразу в нижнем регистре, чтобы не тратить ресурсы в цикле
+	vmIndicators := []string{
+		"vmware", "virtualbox", "qemu", "xen",
+		"hyper-v", "kvm", "parallels", "virtual machine",
+	}
+
+	// Проверяем каждую строку из биоса на наличие совпадений
+	for _, biosVendor := range biosVersions {
+		lowerVendor := strings.ToLower(biosVendor)
+		for _, indicator := range vmIndicators {
+			if strings.Contains(lowerVendor, indicator) {
+				return true
+			}
 		}
 	}
 
@@ -695,8 +842,7 @@ func (c *OSCollector) checkHypervisorHost() bool {
 
 // checkHyperVRegistry проверяет ключи реестра Hyper-V
 func (c *OSCollector) checkHyperVRegistry() bool {
-	// Проверяем основной ключ Hyper-V
-	k, err := registry.OpenKey(
+	regKey, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
 		`SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization`,
 		registry.QUERY_VALUE,
@@ -704,9 +850,11 @@ func (c *OSCollector) checkHyperVRegistry() bool {
 	if err != nil {
 		return false
 	}
-	defer k.Close()
+	defer func() {
+		_ = regKey.Close()
+	}()
 
-	// Проверяем различные значения, которые указывают на Hyper-V
+	// Проверяем целочисленные значения
 	valueNames := []string{
 		"HyperVisorPresent",
 		"HypervisorPresent",
@@ -716,7 +864,7 @@ func (c *OSCollector) checkHyperVRegistry() bool {
 	}
 
 	for _, name := range valueNames {
-		if val, _, err := k.GetIntegerValue(name); err == nil && val == 1 {
+		if val, _, err := regKey.GetIntegerValue(name); err == nil && val == 1 {
 			return true
 		}
 	}
@@ -729,7 +877,8 @@ func (c *OSCollector) checkHyperVRegistry() bool {
 	}
 
 	for _, name := range stringValueNames {
-		if val, _, err := k.GetStringValue(name); err == nil {
+		if val, _, err := regKey.GetStringValue(name); err == nil {
+			// Линтер одобрит tagged switch
 			switch val {
 			case "Enabled", "Running", "Active", "1", "True":
 				return true
@@ -737,18 +886,29 @@ func (c *OSCollector) checkHyperVRegistry() bool {
 		}
 	}
 
-	// Проверяем наличие под-ключей (даже если значения не читаются)
+	// Проверяем наличие под-ключей
 	subKeys := []string{
 		`SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\Workspaces`,
 		`SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\GuestCommunicationServices`,
 	}
 
 	for _, subKey := range subKeys {
-		if k2, err := registry.OpenKey(registry.LOCAL_MACHINE, subKey, registry.QUERY_VALUE); err == nil {
-			k2.Close()
+		if hasKey := c.checkKeyExists(subKey); hasKey {
 			return true
 		}
 	}
 
 	return false
+}
+
+// Вспомогательный метод для безопасной и изолированной проверки существования ключа
+func (c *OSCollector) checkKeyExists(path string) bool {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_ = k.Close()
+	}()
+	return true
 }

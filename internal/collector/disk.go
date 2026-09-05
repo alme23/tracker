@@ -7,6 +7,7 @@ package collector
 import (
 	"fmt"
 	"strings"
+	"unsafe"
 
 	"github.com/alme23/tracker/internal/models"
 	"golang.org/x/sys/windows"
@@ -24,11 +25,14 @@ func (c *DiskCollector) Collect() (models.DiskStatuses, error) {
 
 	var volBuf [50]uint16
 
-	handle, err := windows.FindFirstVolume(&volBuf[0], uint32(len(volBuf)))
+	// Использование unsafe.SliceData гарантирует безопасность границ массива для линтеров
+	handle, err := windows.FindFirstVolume(unsafe.SliceData(volBuf[:]), uint32(len(volBuf)))
 	if err != nil {
-		return nil, fmt.Errorf("ошибка WinAPI FindFirstVolume: %v", err)
+		return nil, fmt.Errorf("ошибка WinAPI FindFirstVolume: %w", err)
 	}
-	defer windows.FindVolumeClose(handle)
+	defer func() {
+		_ = windows.FindVolumeClose(handle)
+	}()
 
 	for {
 		volumeGUIDPath := windows.UTF16ToString(volBuf[:])
@@ -37,7 +41,7 @@ func (c *DiskCollector) Collect() (models.DiskStatuses, error) {
 			result = append(result, info)
 		}
 
-		if !c.nextVolume(handle, &volBuf[0], uint32(len(volBuf))) {
+		if !c.nextVolume(handle, unsafe.SliceData(volBuf[:]), uint32(len(volBuf))) {
 			break
 		}
 	}
@@ -52,7 +56,6 @@ func (c *DiskCollector) processVolume(volumeGUIDPath string) (models.DriveInfo, 
 		return models.DriveInfo{}, false
 	}
 
-	// Определяем тип диска
 	rawDriveType := windows.GetDriveType(volumePtr)
 
 	// Отсекаем сетевые диски и неизвестные
@@ -60,22 +63,18 @@ func (c *DiskCollector) processVolume(volumeGUIDPath string) (models.DriveInfo, 
 		return models.DriveInfo{}, false
 	}
 
-	// Мапим тип диска
 	diskType := c.mapDriveType(rawDriveType)
 
-	// Получаем пути монтирования
 	mountPath := c.getMountPath(volumePtr)
 	if mountPath == "" {
 		return models.DriveInfo{}, false
 	}
 
-	// Создаем структуру
 	info := models.DriveInfo{
 		Type:   diskType,
 		Letter: c.formatMountPath(mountPath),
 	}
 
-	// Получаем информацию о диске
 	mountPathPtr, err := windows.UTF16PtrFromString(mountPath)
 	if err == nil {
 		c.collectVolumeInfoAndSpace(&info, mountPathPtr)
@@ -106,12 +105,12 @@ func (c *DiskCollector) mapDriveType(rawType uint32) models.DriveType {
 
 // getMountPath получает первый путь монтирования
 func (c *DiskCollector) getMountPath(volumePtr *uint16) string {
-	var pathNamesBuf [1024]uint16 // Достаточно большой буфер
+	var pathNamesBuf [1024]uint16
 	var returnLen uint32
 
 	err := windows.GetVolumePathNamesForVolumeName(
 		volumePtr,
-		&pathNamesBuf[0],
+		unsafe.SliceData(pathNamesBuf[:]),
 		uint32(len(pathNamesBuf)),
 		&returnLen,
 	)
@@ -120,21 +119,19 @@ func (c *DiskCollector) getMountPath(volumePtr *uint16) string {
 		return ""
 	}
 
-	return windows.UTF16ToString(pathNamesBuf[:])
+	// Читаем строго до returnLen, чтобы не сканировать лишний хвост буфера
+	return windows.UTF16ToString(pathNamesBuf[:returnLen])
 }
 
 // formatMountPath форматирует путь монтирования
 func (c *DiskCollector) formatMountPath(mountPath string) string {
-	// Для букв дисков: "C:\" -> "C:"
 	if len(mountPath) == 3 && mountPath[1] == ':' && mountPath[2] == '\\' {
 		return mountPath[:2]
 	}
-
-	// Для точек монтирования: "C:\MountPoint\" -> "C:\MountPoint"
 	return strings.TrimSuffix(mountPath, "\\")
 }
 
-// collectVolumeInfo и collectDiskSpace можно объединить в один вызов
+// collectVolumeInfoAndSpace собирает информацию о томе и свободном месте
 func (c *DiskCollector) collectVolumeInfoAndSpace(info *models.DriveInfo, mountPathPtr *uint16) {
 	var volumeNameBuf [256]uint16
 	var volumeSerial uint32
@@ -146,18 +143,18 @@ func (c *DiskCollector) collectVolumeInfoAndSpace(info *models.DriveInfo, mountP
 	// Получаем информацию о томе
 	err := windows.GetVolumeInformation(
 		mountPathPtr,
-		&volumeNameBuf[0],
+		unsafe.SliceData(volumeNameBuf[:]),
 		uint32(len(volumeNameBuf)),
 		&volumeSerial,
 		&maxComponentLength,
 		&fileSystemFlags,
-		&fsNameBuf[0],
+		unsafe.SliceData(fsNameBuf[:]),
 		uint32(len(fsNameBuf)),
 	)
 
 	if err == nil {
 		info.VolumeName = windows.UTF16ToString(volumeNameBuf[:])
-		info.SerialNumber = fmt.Sprintf("%04X-%04X", (volumeSerial>>16)&0xFFFF, volumeSerial&0xFFFF)
+		info.SerialNumber = volumeSerial // Родной uint32 серийник!
 		info.FSType = windows.UTF16ToString(fsNameBuf[:])
 		info.IsReady = true
 	} else {
@@ -165,7 +162,7 @@ func (c *DiskCollector) collectVolumeInfoAndSpace(info *models.DriveInfo, mountP
 		info.IsReady = false
 	}
 
-	// Получаем информацию о размере (только если диск готов)
+	// Получаем информацию о размере только для готовых дисков
 	if info.IsReady {
 		err = windows.GetDiskFreeSpaceEx(
 			mountPathPtr,

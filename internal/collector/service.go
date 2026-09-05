@@ -156,7 +156,9 @@ func (c *ServiceCollector) readRegistryPortGeneric(keyPath, valueName, defaultPo
 	if err != nil {
 		return defaultPort
 	}
-	defer k.Close()
+	defer func() {
+		_ = k.Close()
+	}()
 
 	// Проверяем тип значения в реестре, чтобы избежать паники рантайма
 	_, valType, err := k.GetValue(valueName, nil)
@@ -190,7 +192,9 @@ func (c *ServiceCollector) checkWindowsService(serviceName string) (installed bo
 	if err != nil {
 		return false, false, err
 	}
-	defer windows.CloseServiceHandle(scmHandle)
+	defer func() {
+		_ = windows.CloseServiceHandle(scmHandle)
+	}()
 
 	serviceHandle, err := windows.OpenService(scmHandle, windows.StringToUTF16Ptr(serviceName), windows.SERVICE_QUERY_STATUS)
 	if err != nil {
@@ -199,7 +203,9 @@ func (c *ServiceCollector) checkWindowsService(serviceName string) (installed bo
 		}
 		return false, false, err
 	}
-	defer windows.CloseServiceHandle(serviceHandle)
+	defer func() {
+		_ = windows.CloseServiceHandle(serviceHandle)
+	}()
 
 	installed = true
 
@@ -220,7 +226,7 @@ func (c *ServiceCollector) checkFirewallPort(host, port string) bool {
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	_ = conn.Close()
 	return true
 }
 
@@ -230,7 +236,9 @@ func (c *ServiceCollector) getLocalIP() string {
 	if err != nil {
 		return "127.0.0.1"
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 	return localAddr.IP.String()
 }
