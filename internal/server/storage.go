@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/alme23/tracker/internal/models"
 	_ "modernc.org/sqlite"
@@ -23,6 +24,7 @@ func NewStorage(dbPath string) (*Storage, error) {
 		return nil, fmt.Errorf("открытие БД: %w", err)
 	}
 
+	// SQLite — одно соединение на запись
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
@@ -32,11 +34,20 @@ func NewStorage(dbPath string) (*Storage, error) {
 
 	s := &Storage{db: db}
 
+	// Включаем WAL режим
+	if err := s.enableWAL(); err != nil {
+		return nil, fmt.Errorf("включение WAL: %w", err)
+	}
+
+	// Создаем схему
 	if err := s.createSchema(); err != nil {
 		return nil, fmt.Errorf("создание схемы: %w", err)
 	}
 
-	log.Printf("База данных открыта: %s", dbPath)
+	// Запускаем очистку старых метрик
+	s.startCleanupRoutine()
+
+	log.Printf("База данных открыта: %s (WAL режим, очистка 7 дней)", dbPath)
 
 	return s, nil
 }
@@ -44,6 +55,27 @@ func NewStorage(dbPath string) (*Storage, error) {
 // Close закрывает соединение
 func (s *Storage) Close() error {
 	return s.db.Close()
+}
+
+// enableWAL включает WAL режим для параллельных чтений
+func (s *Storage) enableWAL() error {
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA cache_size=-65536", // 64 MB кэш
+		"PRAGMA temp_store=MEMORY",
+		"PRAGMA foreign_keys=ON",
+	}
+
+	for _, pragma := range pragmas {
+		if _, err := s.db.Exec(pragma); err != nil {
+			return fmt.Errorf("PRAGMA %s: %w", pragma, err)
+		}
+	}
+
+	log.Println("WAL режим включен")
+	return nil
 }
 
 // createSchema создает таблицы
@@ -132,6 +164,7 @@ func (s *Storage) createSchema() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_ram_metrics ON ram_metrics(computer_id, timestamp DESC);
+	CREATE INDEX IF NOT EXISTS idx_ram_metrics_time ON ram_metrics(timestamp);
 
 	-- МЕТРИКИ: Свободное место на дисках
 	CREATE TABLE IF NOT EXISTS disk_metrics (
@@ -147,26 +180,150 @@ func (s *Storage) createSchema() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_disk_metrics ON disk_metrics(computer_id, timestamp DESC);
+	CREATE INDEX IF NOT EXISTS idx_disk_metrics_time ON disk_metrics(timestamp);
 
 	-- АЛЕРТЫ
 	CREATE TABLE IF NOT EXISTS alerts (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		computer_id INTEGER NOT NULL,
-		alert_type TEXT NOT NULL,      -- 'disk_low_space', 'ram_high_usage'
-		severity TEXT NOT NULL,        -- 'warning', 'critical'
+		alert_type TEXT NOT NULL,
+		severity TEXT NOT NULL,
 		message TEXT NOT NULL,
-		value REAL NOT NULL,           -- текущее значение (процент)
-		threshold REAL NOT NULL,       -- пороговое значение
+		value REAL NOT NULL,
+		threshold REAL NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		resolved_at TIMESTAMP,         -- NULL = активен
+		resolved_at TIMESTAMP,
 		FOREIGN KEY (computer_id) REFERENCES computers(id)
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(computer_id, resolved_at);
+	CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(alert_type, resolved_at);
 	`
 
 	_, err := s.db.Exec(schema)
 	return err
+}
+
+// startCleanupRoutine запускает периодическую очистку
+func (s *Storage) startCleanupRoutine() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if err := s.CleanupOldData(); err != nil {
+				log.Printf("Ошибка очистки: %v", err)
+			}
+		}
+	}()
+
+	log.Println("Запущена периодическая очистка (каждый час)")
+}
+
+// CleanupOldData удаляет старые данные
+func (s *Storage) CleanupOldData() error {
+	// Глубина хранения
+	const (
+		metricsRetentionDays  = 7  // Метрики: 7 дней
+		sessionsRetentionDays = 90 // Сессии: 90 дней
+		alertsRetentionDays   = 30 // Алерты: 30 дней (после решения)
+	)
+
+	// Вычисляем пороговые значения (Unix timestamp)
+	metricsThreshold := time.Now().AddDate(0, 0, -metricsRetentionDays).Unix()
+	sessionsThreshold := time.Now().AddDate(0, 0, -sessionsRetentionDays).Unix()
+	alertsThreshold := time.Now().AddDate(0, 0, -alertsRetentionDays)
+
+	// Начинаем транзакцию
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("начало транзакции: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Удаляем старые метрики RAM
+	result, err := tx.Exec(`
+		DELETE FROM ram_metrics WHERE timestamp < ?`,
+		metricsThreshold,
+	)
+	if err != nil {
+		return fmt.Errorf("очистка ram_metrics: %w", err)
+	}
+	ramDeleted, _ := result.RowsAffected()
+
+	// Удаляем старые метрики дисков
+	result, err = tx.Exec(`
+		DELETE FROM disk_metrics WHERE timestamp < ?`,
+		metricsThreshold,
+	)
+	if err != nil {
+		return fmt.Errorf("очистка disk_metrics: %w", err)
+	}
+	diskDeleted, _ := result.RowsAffected()
+
+	// Удаляем старые сессии (только неактивные)
+	result, err = tx.Exec(`
+		DELETE FROM sessions WHERE is_active = 0 AND login_time < ?`,
+		sessionsThreshold,
+	)
+	if err != nil {
+		return fmt.Errorf("очистка sessions: %w", err)
+	}
+	sessionsDeleted, _ := result.RowsAffected()
+
+	// Удаляем старые решенные алерты (используем Unix timestamp)
+	result, err = tx.Exec(`
+		DELETE FROM alerts
+		WHERE resolved_at IS NOT NULL
+		AND strftime('%s', resolved_at) < ?`,
+		alertsThreshold.Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("очистка alerts: %w", err)
+	}
+	alertsDeleted, _ := result.RowsAffected()
+
+	// Коммитим
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("коммит очистки: %w", err)
+	}
+
+	// Логируем результаты
+	if ramDeleted+diskDeleted+sessionsDeleted+alertsDeleted > 0 {
+		log.Printf("Очистка: RAM=%d, Диски=%d, Сессии=%d, Алерты=%d",
+			ramDeleted, diskDeleted, sessionsDeleted, alertsDeleted)
+	}
+
+	return nil
+}
+
+// VACUUM выполняет оптимизацию базы данных
+func (s *Storage) VACUUM() error {
+	log.Println("Запуск VACUUM...")
+	_, err := s.db.Exec("VACUUM")
+	if err != nil {
+		return fmt.Errorf("VACUUM: %w", err)
+	}
+	log.Println("VACUUM завершен")
+	return nil
+}
+
+// GetDatabaseSize возвращает размер базы данных
+func (s *Storage) GetDatabaseSize() (int64, error) {
+	var pageCount int64
+	var pageSize int64
+
+	err := s.db.QueryRow("PRAGMA page_count").Scan(&pageCount)
+	if err != nil {
+		return 0, err
+	}
+
+	err = s.db.QueryRow("PRAGMA page_size").Scan(&pageSize)
+	if err != nil {
+		return 0, err
+	}
+
+	return pageCount * pageSize, nil
 }
 
 // SaveSnapshot сохраняет snapshot в БД
@@ -189,7 +346,7 @@ func (s *Storage) SaveSnapshot(snapshot *models.SystemSnapshot) error {
 		return err
 	}
 
-	// 3. Сессия (с session_type)
+	// 3. Сессия
 	if err := s.handleSession(tx, userID, computerID, snapshot.Timestamp, snapshot); err != nil {
 		return err
 	}

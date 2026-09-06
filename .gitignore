@@ -41,4 +41,5 @@ AGENT.md
 
 # Skip database
 *.db
+*.db-*
 *.wal

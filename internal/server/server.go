@@ -17,9 +17,9 @@ import (
 
 // Config содержит настройки сервера
 type Config struct {
-	ListenAddr   string // Адрес для прослушивания
-	SharedSecret string // Секретный ключ
-	DBPath       string // Путь к базе данных SQLite
+	ListenAddr   string
+	SharedSecret string
+	DBPath       string
 }
 
 // Server принимает данные от агентов
@@ -89,67 +89,21 @@ func (s *Server) Start() error {
 	}
 }
 
-// Stop останавливает сервер с graceful shutdown
-func (s *Server) Stop() {
-	s.mu.Lock()
-	if !s.running {
-		s.mu.Unlock()
-		return
-	}
-	s.running = false
-	s.mu.Unlock()
-
-	log.Println("Остановка сервера...")
-
-	// 1. Закрываем listener (новые соединения не принимаются)
-	if s.listener != nil {
-		s.listener.Close()
-		log.Println("Listener закрыт")
-	}
-
-	// 2. Закрываем все активные соединения
-	s.mu.Lock()
-	for conn := range s.conns {
-		conn.Close()
-	}
-	s.mu.Unlock()
-	log.Println("Активные соединения закрыты")
-
-	// 3. Ждем завершения обработчиков с таймаутом
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		log.Println("Все обработчики завершены")
-	case <-time.After(10 * time.Second):
-		log.Println("Таймаут ожидания обработчиков")
-	}
-
-	// 4. Закрываем хранилище
-	if s.storage != nil {
-		s.storage.Close()
-		log.Println("База данных закрыта")
-	}
-
-	close(s.done)
-	log.Println("Сервер остановлен")
-}
-
 // RunWithSignals запускает сервер с обработкой системных сигналов
 func (s *Server) RunWithSignals() error {
 	// Канал для сигналов
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Запускаем сервер в горутине
+	// Канал для ошибок сервера
 	errChan := make(chan error, 1)
+
+	// Запускаем сервер в горутине
 	go func() {
 		errChan <- s.Start()
 	}()
+
+	log.Printf("Сервер запущен. Нажмите Ctrl+C для остановки")
 
 	// Ждем сигнал или ошибку
 	select {
@@ -166,10 +120,64 @@ func (s *Server) RunWithSignals() error {
 	}
 }
 
+// Stop останавливает сервер с graceful shutdown
+func (s *Server) Stop() {
+	s.mu.Lock()
+	if !s.running {
+		s.mu.Unlock()
+		return
+	}
+	s.running = false
+	s.mu.Unlock()
+
+	log.Println("Остановка сервера...")
+
+	// 1. Закрываем listener
+	if s.listener != nil {
+		s.listener.Close()
+		log.Println("Listener закрыт")
+	}
+
+	// 2. Закрываем активные соединения
+	s.mu.Lock()
+	for conn := range s.conns {
+		conn.Close()
+	}
+	s.mu.Unlock()
+	log.Println("Активные соединения закрыты")
+
+	// 3. Ждем завершения обработчиков
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Println("Все обработчики завершены")
+	case <-time.After(10 * time.Second):
+		log.Println("Таймаут ожидания обработчиков")
+	}
+
+	// 4. Финальная очистка
+	if err := s.storage.CleanupOldData(); err != nil {
+		log.Printf("Ошибка финальной очистки: %v", err)
+	}
+
+	// 5. Закрываем хранилище
+	if s.storage != nil {
+		s.storage.Close()
+		log.Println("База данных закрыта")
+	}
+
+	close(s.done)
+	log.Println("Сервер остановлен")
+}
+
 // handleConnection обрабатывает одно соединение
 func (s *Server) handleConnection(conn net.Conn) {
 	defer func() {
-		// Удаляем соединение из мапы
 		s.mu.Lock()
 		delete(s.conns, conn)
 		s.mu.Unlock()
@@ -180,15 +188,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	remoteAddr := conn.RemoteAddr().String()
 	log.Printf("Подключение от %s", remoteAddr)
-
-	// Проверяем, не остановлен ли сервер
-	s.mu.RLock()
-	running := s.running
-	s.mu.RUnlock()
-
-	if !running {
-		return
-	}
 
 	// Принимаем и расшифровываем данные
 	data, err := secproto.HandleConnection(conn, s.config.SharedSecret)
