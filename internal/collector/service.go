@@ -10,10 +10,10 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/alme23/tracker/internal/models"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -41,50 +41,73 @@ func (c *ServiceCollector) Collect() (models.ServicesStatuses, error) {
 	targetIP := c.getLocalIP()
 	vncKnownServers := getVncSignatures()
 
-	var wg sync.WaitGroup
-	errChan := make(chan error, 2)
+	// Используем errgroup прямо внутри коллектора служб для параллельной проверки портов
+	var g errgroup.Group
+	var mu sync.Mutex
 
-	// Используем локальные переменные для хранения результатов
-	statuses := make(models.ServicesStatuses, 2)
+	// Заранее выделяем слайс результатов
+	results := make(models.ServicesStatuses, 0, 1+len(vncKnownServers))
 
-	// Инициализируем с правильными именами
-	statuses[0] = models.ServiceStatus{Name: "RDP", ServiceName: "TermService"}
-	statuses[1] = models.ServiceStatus{Name: "VNC", ServiceName: "unknown"}
-
-	// RDP - обрабатываем на месте
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		c.processRdpService(&statuses[0], targetIP, errChan)
-	}()
-
-	// VNC - обрабатываем на месте
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		c.processVncService(&statuses[1], vncKnownServers, targetIP, errChan)
-	}()
-
-	wg.Wait()
-	close(errChan)
-
-	// Проверяем ошибки
-	for err := range errChan {
-		if err != nil {
-			return nil, err
+	// 1. Параллельно проверяем RDP
+	g.Go(func() error {
+		status := models.ServiceStatus{Name: "RDP", ServiceName: "TermService"}
+		// Исправлено: передаем ошибку в errgroup, если проверка WinAPI завершилась сбоем
+		if err := c.processRdpService(&status, targetIP); err != nil {
+			return err
 		}
+
+		mu.Lock()
+		results = append(results, status)
+		mu.Unlock()
+		return nil
+	})
+
+	// 2. Параллельно проверяем КАЖДУЮ сигнатуру VNC, а не обходим их в цикле!
+	for _, vnc := range vncKnownServers {
+		g.Go(func() error {
+			installed, running, err := c.checkWindowsService(vnc.ServiceName)
+			if err != nil || !installed {
+				return nil // Пропускаем, если не установлена (ошибки логируем локально/игнорируем)
+			}
+
+			status := models.ServiceStatus{
+				Name:        fmt.Sprintf("VNC (%s)", vnc.BrandName),
+				ServiceName: vnc.ServiceName,
+				Installed:   true,
+				Running:     running,
+			}
+
+			portStr := c.readRegistryPortGeneric(vnc.RegistryKey, vnc.ValueName, vnc.DefaultPort)
+			if parsedPort, err := strconv.ParseUint(portStr, 10, 16); err == nil {
+				status.Port = uint16(parsedPort)
+			} else {
+				status.Port = 5900
+			}
+
+			if status.Running && status.Port > 0 {
+				status.PortOpen = c.checkFirewallPort(targetIP, strconv.FormatUint(uint64(status.Port), 10))
+			}
+
+			mu.Lock()
+			results = append(results, status)
+			mu.Unlock()
+			return nil
+		})
 	}
 
-	// Порядок гарантирован: [RDP, VNC]
-	return statuses, nil
+	// Ждем выполнения всех проверок портов (если RDP вернет критическую ошибку, мы её зафиксируем)
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
 
-// processRdpService обрабатывает обычную службу (RDP)
-func (c *ServiceCollector) processRdpService(status *models.ServiceStatus, targetIP string, errChan chan<- error) {
+// processRdpService обрабатывает обычную службу (RDP) и возвращает error вместо записи в канал
+func (c *ServiceCollector) processRdpService(status *models.ServiceStatus, targetIP string) error {
 	installed, running, err := c.checkWindowsService(status.ServiceName)
 	if err != nil {
-		errChan <- err
-		return
+		return fmt.Errorf("ошибка проверки службы RDP: %w", err)
 	}
 
 	status.Installed = installed
@@ -105,53 +128,11 @@ func (c *ServiceCollector) processRdpService(status *models.ServiceStatus, targe
 	if status.Running && status.Port > 0 {
 		status.PortOpen = c.checkFirewallPort(targetIP, strconv.FormatUint(uint64(status.Port), 10))
 	}
+
+	return nil
 }
 
-// processVncService обрабатывает VNC службу
-func (c *ServiceCollector) processVncService(status *models.ServiceStatus, vncServers []vncSignature, targetIP string, errChan chan<- error) {
-	var detected bool
-
-	for _, vnc := range vncServers {
-		installed, running, err := c.checkWindowsService(vnc.ServiceName)
-		if err != nil {
-			errChan <- err
-			return
-		}
-
-		if installed {
-			status.Name = fmt.Sprintf("VNC (%s)", vnc.BrandName)
-			status.ServiceName = vnc.ServiceName
-			status.Installed = true
-			status.Running = running
-
-			portStr := c.readRegistryPortGeneric(vnc.RegistryKey, vnc.ValueName, vnc.DefaultPort)
-			if parsedPort, err := strconv.ParseUint(portStr, 10, 16); err == nil {
-				status.Port = uint16(parsedPort)
-			} else {
-				status.Port = 5900
-			}
-
-			detected = true
-			break
-		}
-	}
-
-	if !detected {
-		status.Name = "VNC"
-		status.Installed = false
-		status.Running = false
-		status.Port = 5900
-	}
-
-	if status.Running && status.Port > 0 {
-		status.PortOpen = c.checkFirewallPort(targetIP, strconv.FormatUint(uint64(status.Port), 10))
-	}
-}
-
-// readRegistryPortGeneric — это "всеядный" метод чтения порта.
-// Он определяет тип данных в реестре (число или строка) и корректно возвращает строковое представление.
 func (c *ServiceCollector) readRegistryPortGeneric(keyPath, valueName, defaultPort string) string {
-	// Открываем ветку реестра только для чтения (права админа НЕ нужны)
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, keyPath, registry.QUERY_VALUE)
 	if err != nil {
 		return defaultPort
@@ -160,24 +141,21 @@ func (c *ServiceCollector) readRegistryPortGeneric(keyPath, valueName, defaultPo
 		_ = k.Close()
 	}()
 
-	// Проверяем тип значения в реестре, чтобы избежать паники рантайма
 	_, valType, err := k.GetValue(valueName, nil)
 	if err != nil {
 		return defaultPort
 	}
 
 	switch valType {
-	case registry.DWORD: // Если порт сохранен как число (RDP, TightVNC)
+	case registry.DWORD:
 		val, _, err := k.GetIntegerValue(valueName)
-		// Валидируем, что число укладывается в границы сетевого порта (uint16)
 		if err == nil && val > 0 && val <= 65535 {
 			return strconv.FormatUint(val, 10)
 		}
 
-	case registry.SZ, registry.EXPAND_SZ: // Если порт сохранен как строка (UltraVNC в некоторых версиях)
+	case registry.SZ, registry.EXPAND_SZ:
 		val, _, err := k.GetStringValue(valueName)
 		if err == nil && val != "" {
-			// Проверяем, что в строке действительно валидный порт uint16
 			if p, parseErr := strconv.ParseUint(val, 10, 16); parseErr == nil && p > 0 {
 				return val
 			}
@@ -196,9 +174,14 @@ func (c *ServiceCollector) checkWindowsService(serviceName string) (installed bo
 		_ = windows.CloseServiceHandle(scmHandle)
 	}()
 
-	serviceHandle, err := windows.OpenService(scmHandle, windows.StringToUTF16Ptr(serviceName), windows.SERVICE_QUERY_STATUS)
+	namePtr, err := windows.UTF16PtrFromString(serviceName)
 	if err != nil {
-		if errors.Is(err, syscall.Errno(1060)) { // ERROR_SERVICE_DOES_NOT_EXIST
+		return false, false, err
+	}
+
+	serviceHandle, err := windows.OpenService(scmHandle, namePtr, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 			return false, false, nil
 		}
 		return false, false, err
@@ -231,7 +214,6 @@ func (c *ServiceCollector) checkFirewallPort(host, port string) bool {
 }
 
 func (c *ServiceCollector) getLocalIP() string {
-	// Элегантный UDP-трюк для определения интерфейса по умолчанию
 	conn, err := net.Dial("udp", "77.88.8.8:80")
 	if err != nil {
 		return "127.0.0.1"
@@ -243,7 +225,6 @@ func (c *ServiceCollector) getLocalIP() string {
 	return localAddr.IP.String()
 }
 
-// getVncSignatures возвращает список VNC сигнатур
 func getVncSignatures() []vncSignature {
 	return []vncSignature{
 		{BrandName: "TightVNC", ServiceName: "tvnserver", RegistryKey: `SOFTWARE\TightVNC\Server`, ValueName: "RfbPort", DefaultPort: "5900"},

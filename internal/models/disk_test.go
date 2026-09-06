@@ -6,6 +6,8 @@ import (
 	"testing"
 )
 
+// ============ Тесты для DriveType.String() ============
+
 func TestDriveTypeString(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -19,6 +21,7 @@ func TestDriveTypeString(t *testing.T) {
 		{"Remote", DriveRemote, "REMOTE"},
 		{"CDROM", DriveCDROM, "CD_ROM"},
 		{"RAM", DriveRAM, "RAM_DISK"},
+		{"Invalid", DriveType(99), "UNKNOWN"},
 	}
 
 	for _, tt := range tests {
@@ -31,6 +34,8 @@ func TestDriveTypeString(t *testing.T) {
 		})
 	}
 }
+
+// ============ Тесты для DriveType.MarshalJSON() ============
 
 func TestDriveTypeMarshalJSON(t *testing.T) {
 	tests := []struct {
@@ -60,6 +65,8 @@ func TestDriveTypeMarshalJSON(t *testing.T) {
 		})
 	}
 }
+
+// ============ Тесты для DriveType.UnmarshalJSON() ============
 
 func TestDriveTypeUnmarshalJSON(t *testing.T) {
 	tests := []struct {
@@ -93,6 +100,8 @@ func TestDriveTypeUnmarshalJSON(t *testing.T) {
 	}
 }
 
+// ============ Тесты для DriveType JSON round-trip ============
+
 func TestDriveTypeJSONRoundTrip(t *testing.T) {
 	types := []DriveType{
 		DriveUnknown,
@@ -105,25 +114,77 @@ func TestDriveTypeJSONRoundTrip(t *testing.T) {
 	}
 
 	for _, original := range types {
-		// Marshal
 		data, err := original.MarshalJSON()
 		if err != nil {
-			t.Fatalf("MarshalJSON failed for %v: %v", original, err)
+			t.Fatalf("MarshalJSON failed: %v", err)
 		}
 
-		// Unmarshal
 		var restored DriveType
 		err = restored.UnmarshalJSON(data)
 		if err != nil {
-			t.Fatalf("UnmarshalJSON failed for %s: %v", data, err)
+			t.Fatalf("UnmarshalJSON failed: %v", err)
 		}
 
-		// Сравниваем
 		if restored != original {
 			t.Errorf("Round trip failed: %v -> %v", original, restored)
 		}
 	}
 }
+
+// ============ Тесты для GetSerialNumberString() ============
+
+func TestGetSerialNumberString(t *testing.T) {
+	tests := []struct {
+		name         string
+		serialNumber uint32
+		expected     string
+	}{
+		{"Zero", 0, ""},
+		{"Typical", 0x0C904DA6, "0C90-4DA6"},
+		{"Max", 0xFFFFFFFF, "FFFF-FFFF"},
+		{"Min", 0x00000001, "0000-0001"},
+		{"All zeros", 0x00000000, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			drive := DriveInfo{SerialNumber: tt.serialNumber}
+			result := drive.GetSerialNumberString()
+
+			if result != tt.expected {
+				t.Errorf("GetSerialNumberString() = %s, want %s", result, tt.expected)
+			}
+		})
+	}
+}
+
+// ============ Тесты для GetSerialNumberHex() ============
+
+func TestGetSerialNumberHex(t *testing.T) {
+	tests := []struct {
+		name         string
+		serialNumber uint32
+		expected     string
+	}{
+		{"Zero", 0, ""},
+		{"Typical", 0x0C904DA6, "0C904DA6"},
+		{"Max", 0xFFFFFFFF, "FFFFFFFF"},
+		{"Min", 0x00000001, "00000001"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			drive := DriveInfo{SerialNumber: tt.serialNumber}
+			result := drive.GetSerialNumberHex()
+
+			if result != tt.expected {
+				t.Errorf("GetSerialNumberHex() = %s, want %s", result, tt.expected)
+			}
+		})
+	}
+}
+
+// ============ Тесты для DriveInfo JSON ============
 
 func TestDriveInfoJSON(t *testing.T) {
 	drive := DriveInfo{
@@ -134,7 +195,7 @@ func TestDriveInfoJSON(t *testing.T) {
 		FreeBytes:    250000000000,
 		UsedBytes:    250000000000,
 		VolumeName:   "System",
-		SerialNumber: 123456,
+		SerialNumber: 0xDEA5D590,
 		IsReady:      true,
 	}
 
@@ -159,124 +220,25 @@ func TestDriveInfoJSON(t *testing.T) {
 		t.Errorf("Type: %v != %v", restored.Type, drive.Type)
 	}
 
+	if restored.SerialNumber != drive.SerialNumber {
+		t.Errorf("SerialNumber: %d != %d", restored.SerialNumber, drive.SerialNumber)
+	}
+
 	if restored.TotalBytes != drive.TotalBytes {
 		t.Errorf("TotalBytes: %d != %d", restored.TotalBytes, drive.TotalBytes)
 	}
 }
 
-func TestDriveInfoSerialNumber(t *testing.T) {
-	tests := []struct {
-		name         string
-		serialNumber uint32
-		expectedHex  string
-		expectedStr  string
-	}{
-		{
-			name:         "Zero",
-			serialNumber: 0,
-			expectedHex:  "",
-			expectedStr:  "",
-		},
-		{
-			name:         "Typical",
-			serialNumber: 0x0C904DA6,
-			expectedHex:  "0C904DA6",
-			expectedStr:  "0C90-4DA6",
-		},
-		{
-			name:         "Max",
-			serialNumber: 0xFFFFFFFF,
-			expectedHex:  "FFFFFFFF",
-			expectedStr:  "FFFF-FFFF",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			drive := DriveInfo{
-				SerialNumber: tt.serialNumber,
-			}
-
-			if got := drive.GetSerialNumberHex(); got != tt.expectedHex {
-				t.Errorf("GetSerialNumberHex() = %s, want %s", got, tt.expectedHex)
-			}
-
-			if got := drive.GetSerialNumberString(); got != tt.expectedStr {
-				t.Errorf("GetSerialNumberString() = %s, want %s", got, tt.expectedStr)
-			}
-		})
-	}
-}
-
-func TestDriveInfoJSONWithSerialNumber(t *testing.T) {
-	drive := DriveInfo{
-		Letter:       "C:",
-		Type:         DriveFixed,
-		SerialNumber: 0x0C904DA6,
-	}
-
-	data, err := json.Marshal(drive)
-	if err != nil {
-		t.Fatalf("JSON marshal failed: %v", err)
-	}
-
-	t.Logf("JSON: %s", data)
-
-	var restored DriveInfo
-	err = json.Unmarshal(data, &restored)
-	if err != nil {
-		t.Fatalf("JSON unmarshal failed: %v", err)
-	}
-
-	if restored.SerialNumber != drive.SerialNumber {
-		t.Errorf("SerialNumber: %d != %d", restored.SerialNumber, drive.SerialNumber)
-	}
-
-	// Проверяем форматирование
-	if restored.GetSerialNumberString() != "0C90-4DA6" {
-		t.Errorf("GetSerialNumberString() = %s, want 0C90-4DA6",
-			restored.GetSerialNumberString())
-	}
-}
-
-func TestDriveInfoFields(t *testing.T) {
-	drive := DriveInfo{
-		Letter:     "D:",
-		Type:       DriveRemovable,
-		FSType:     "FAT32",
-		TotalBytes: 16000000000,
-		FreeBytes:  8000000000,
-		UsedBytes:  8000000000,
-		IsReady:    true,
-	}
-
-	// Проверяем вычисляемые поля
-	if drive.UsedBytes != drive.TotalBytes-drive.FreeBytes {
-		t.Error("UsedBytes != TotalBytes - FreeBytes")
-	}
-
-	// Проверяем, что FreeBytes <= TotalBytes
-	if drive.FreeBytes > drive.TotalBytes {
-		t.Error("FreeBytes > TotalBytes")
-	}
-
-	// Проверяем, что UsedBytes <= TotalBytes
-	if drive.UsedBytes > drive.TotalBytes {
-		t.Error("UsedBytes > TotalBytes")
-	}
-}
+// ============ Тесты для DiskStatuses ============
 
 func TestDiskStatusesType(t *testing.T) {
 	var statuses DiskStatuses
 
-	if len(statuses) == 0 {
-		t.Log("Empty DiskStatuses is nil")
+	if statuses != nil {
+		t.Error("Empty DiskStatuses should be nil")
 	}
 
-	statuses = append(statuses, DriveInfo{
-		Letter: "C:",
-		Type:   DriveFixed,
-	})
+	statuses = append(statuses, DriveInfo{Letter: "C:", Type: DriveFixed})
 
 	if len(statuses) != 1 {
 		t.Errorf("Len = %d, want 1", len(statuses))
@@ -287,47 +249,7 @@ func TestDiskStatusesType(t *testing.T) {
 	}
 }
 
-func TestDriveTypeValues(t *testing.T) {
-	// Проверяем, что значения констант уникальны
-	values := map[DriveType]bool{
-		DriveUnknown:   true,
-		DriveNoRootDir: true,
-		DriveRemovable: true,
-		DriveFixed:     true,
-		DriveRemote:    true,
-		DriveCDROM:     true,
-		DriveRAM:       true,
-	}
-
-	if len(values) != 7 {
-		t.Errorf("Expected 7 unique drive types, got %d", len(values))
-	}
-}
-
-func TestDriveTypeOrder(t *testing.T) {
-	// Проверяем порядок констант
-	if DriveUnknown != 0 {
-		t.Error("DriveUnknown should be 0")
-	}
-	if DriveNoRootDir != 1 {
-		t.Error("DriveNoRootDir should be 1")
-	}
-	if DriveRemovable != 2 {
-		t.Error("DriveRemovable should be 2")
-	}
-	if DriveFixed != 3 {
-		t.Error("DriveFixed should be 3")
-	}
-	if DriveRemote != 4 {
-		t.Error("DriveRemote should be 4")
-	}
-	if DriveCDROM != 5 {
-		t.Error("DriveCDROM should be 5")
-	}
-	if DriveRAM != 6 {
-		t.Error("DriveRAM should be 6")
-	}
-}
+// ============ Бенчмарки ============
 
 func BenchmarkDriveTypeString(b *testing.B) {
 	for b.Loop() {
@@ -348,6 +270,24 @@ func BenchmarkDriveTypeUnmarshalJSON(b *testing.B) {
 	for b.Loop() {
 		var dt DriveType
 		_ = dt.UnmarshalJSON(data)
+	}
+}
+
+func BenchmarkGetSerialNumberString(b *testing.B) {
+	drive := DriveInfo{SerialNumber: 0x0C904DA6}
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = drive.GetSerialNumberString()
+	}
+}
+
+func BenchmarkGetSerialNumberHex(b *testing.B) {
+	drive := DriveInfo{SerialNumber: 0x0C904DA6}
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = drive.GetSerialNumberHex()
 	}
 }
 

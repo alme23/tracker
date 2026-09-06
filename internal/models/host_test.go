@@ -3,47 +3,153 @@ package models
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
 
+// ============ Тесты для HostInfo полей ============
+
 func TestHostInfoFields(t *testing.T) {
 	host := HostInfo{
-		Hostname:         "IT-S",
-		FQDN:             "IT-S.rsa.rogsibal.ru",
-		PhysicalHostname: "IT-S",
-		PhysicalFQDN:     "IT-S.rsa.rogsibal.ru",
-		Domain:           "rsa.rogsibal.ru",
-		UpTimeSeconds:    9798016,
-		BootTime:         time.Now().Add(-9798016 * time.Second),
-		TimeZone:         "RTZ 2 (зима)",
-		TimeZoneOffset:   180,
-		Manufacturer:     "Hewlett-Packard",
-		Model:            "HP Z420 Workstation",
-		SKU:              "LJ449AV",
-		Family:           "103C_53335X G=D",
-		BIOSVendor:       "Hewlett-Packard",
-		BIOSVersion:      "J61 v03.85",
-		BIOSDate:         "11/19/2014",
+		Hostname:      "IT-S",
+		FQDN:          "IT-S.rsa.rogsibal.ru",
+		Domain:        "rsa.rogsibal.ru",
+		UpTimeSeconds: 9798016,
+		BootTime:      1747109492,
+		Manufacturer:  "Hewlett-Packard",
+		Model:         "HP Z420 Workstation",
+		BIOSVendor:    "Hewlett-Packard",
+		BIOSVersion:   "J61 v03.85",
 	}
 
-	// Проверяем основные поля
 	if host.Hostname == "" {
 		t.Error("Hostname is empty")
 	}
 
-	if host.FQDN == "" {
-		t.Error("FQDN is empty")
+	if host.BootTime == 0 {
+		t.Error("BootTime is 0")
 	}
 
 	if host.Manufacturer == "" {
 		t.Error("Manufacturer is empty")
 	}
+}
 
-	if host.Model == "" {
-		t.Error("Model is empty")
+// ============ Тесты для GetBootTime() ============
+
+func TestGetBootTime(t *testing.T) {
+	tests := []struct {
+		name     string
+		bootTime uint64
+		expected time.Time
+	}{
+		{
+			name:     "Zero",
+			bootTime: 0,
+			expected: time.Time{},
+		},
+		{
+			name:     "Valid timestamp",
+			bootTime: 1747109492,
+			expected: time.Unix(1747109492, 0),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host := HostInfo{BootTime: tt.bootTime}
+			result := host.GetBootTime()
+
+			if !result.Equal(tt.expected) {
+				t.Errorf("GetBootTime() = %v, want %v", result, tt.expected)
+			}
+		})
 	}
 }
+
+// ============ Тесты для GetBootTimeString() ============
+
+func TestGetBootTimeString(t *testing.T) {
+	tests := []struct {
+		name     string
+		bootTime uint64
+		expected string
+	}{
+		{
+			name:     "Zero",
+			bootTime: 0,
+			expected: "UNKNOWN",
+		},
+		{
+			name:     "Valid timestamp",
+			bootTime: 1747109492,
+			expected: "2025-05-13 07:11:32",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host := HostInfo{BootTime: tt.bootTime}
+			result := host.GetBootTimeString()
+
+			if result != tt.expected {
+				t.Errorf("GetBootTimeString() = %s, want %s", result, tt.expected)
+			}
+		})
+	}
+}
+
+// ============ Тесты для GetUpTime() ============
+
+func TestGetUpTime(t *testing.T) {
+	host := HostInfo{UpTimeSeconds: 3600}
+
+	duration := host.GetUpTime()
+
+	if duration != time.Hour {
+		t.Errorf("GetUpTime() = %v, want %v", duration, time.Hour)
+	}
+}
+
+// ============ Тесты для GetUpTimeString() ============
+
+func TestGetUpTimeString(t *testing.T) {
+	tests := []struct {
+		name     string
+		uptime   uint64
+		expected string
+	}{
+		{
+			name:     "Minutes only",
+			uptime:   300,
+			expected: "5 minutes",
+		},
+		{
+			name:     "Hours and minutes",
+			uptime:   9000,
+			expected: "2 hours, 30 minutes",
+		},
+		{
+			name:     "Days, hours, minutes",
+			uptime:   9798016,
+			expected: "113 days, 9 hours, 40 minutes",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host := HostInfo{UpTimeSeconds: tt.uptime}
+			result := host.GetUpTimeString()
+
+			if result != tt.expected {
+				t.Errorf("GetUpTimeString() = %s, want %s", result, tt.expected)
+			}
+		})
+	}
+}
+
+// ============ Тесты для HostInfo JSON ============
 
 func TestHostInfoJSON(t *testing.T) {
 	host := HostInfo{
@@ -51,11 +157,10 @@ func TestHostInfoJSON(t *testing.T) {
 		FQDN:           "IT-S.rsa.rogsibal.ru",
 		Domain:         "rsa.rogsibal.ru",
 		UpTimeSeconds:  9798016,
-		BootTime:       time.Date(2026, 5, 13, 7, 11, 32, 0, time.UTC),
-		TimeZone:       "RTZ 2 (зима)",
-		TimeZoneOffset: 180,
+		BootTime:       1747109492,
 		Manufacturer:   "Hewlett-Packard",
 		Model:          "HP Z420 Workstation",
+		TimeZoneOffset: 180,
 	}
 
 	data, err := json.Marshal(host)
@@ -71,17 +176,12 @@ func TestHostInfoJSON(t *testing.T) {
 		t.Fatalf("JSON unmarshal failed: %v", err)
 	}
 
-	// Сравниваем поля
 	if restored.Hostname != host.Hostname {
 		t.Errorf("Hostname: %s != %s", restored.Hostname, host.Hostname)
 	}
 
-	if restored.FQDN != host.FQDN {
-		t.Errorf("FQDN: %s != %s", restored.FQDN, host.FQDN)
-	}
-
-	if restored.Domain != host.Domain {
-		t.Errorf("Domain: %s != %s", restored.Domain, host.Domain)
+	if restored.BootTime != host.BootTime {
+		t.Errorf("BootTime: %d != %d", restored.BootTime, host.BootTime)
 	}
 
 	if restored.UpTimeSeconds != host.UpTimeSeconds {
@@ -93,8 +193,9 @@ func TestHostInfoJSON(t *testing.T) {
 	}
 }
 
-func TestHostInfoOmitEmpty(t *testing.T) {
-	// Поля с omitempty не должны появляться в JSON если пустые
+// ============ Тесты на проверку JSON полей ============
+
+func TestHostInfoJSONFields(t *testing.T) {
 	host := HostInfo{
 		Hostname: "TestHost",
 	}
@@ -106,196 +207,80 @@ func TestHostInfoOmitEmpty(t *testing.T) {
 
 	jsonStr := string(data)
 
-	// Эти поля не должны быть в JSON
-	if contains(jsonStr, "physical_hostname") {
-		t.Error("physical_hostname should be omitted when empty")
+	// Проверяем наличие обязательных полей
+	requiredFields := []string{
+		"hostname",
+		"fqdn",
+		"physical_hostname",
+		"physical_fqdn",
+		"domain",
+		"workgroup",
+		"uptime_seconds",
+		"boot_time",
+		"timezone",
+		"timezone_offset",
+		"manufacturer",
+		"model",
+		"sku",
+		"family",
+		"version",
+		"serial_number",
+		"bios_vendor",
+		"bios_version",
+		"bios_date",
+		"bios_major_release",
+		"bios_minor_release",
+		"baseboard_manufacturer",
+		"baseboard_product",
+		"baseboard_version",
 	}
 
-	if contains(jsonStr, "workgroup") {
-		t.Error("workgroup should be omitted when empty")
-	}
-
-	if contains(jsonStr, "sku") {
-		t.Error("sku should be omitted when empty")
-	}
-
-	// Эти поля должны быть в JSON
-	if !contains(jsonStr, "hostname") {
-		t.Error("hostname should be in JSON")
-	}
-}
-
-func TestHostInfoTimeZoneOffset(t *testing.T) {
-	tests := []struct {
-		name   string
-		offset int16
-	}{
-		{"UTC", 0},
-		{"Moscow", 180},
-		{"New York", -300},
-		{"Tokyo", 540},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			host := HostInfo{
-				Hostname:       "Test",
-				TimeZoneOffset: tt.offset,
-			}
-
-			data, err := json.Marshal(host)
-			if err != nil {
-				t.Fatalf("JSON marshal failed: %v", err)
-			}
-
-			var restored HostInfo
-			err = json.Unmarshal(data, &restored)
-			if err != nil {
-				t.Fatalf("JSON unmarshal failed: %v", err)
-			}
-
-			if restored.TimeZoneOffset != tt.offset {
-				t.Errorf("TimeZoneOffset: %d != %d", restored.TimeZoneOffset, tt.offset)
-			}
-		})
+	for _, field := range requiredFields {
+		if !strings.Contains(jsonStr, `"`+field+`"`) {
+			t.Errorf("JSON missing field: %s", field)
+		}
 	}
 }
 
-func TestHostInfoBootTime(t *testing.T) {
-	bootTime := time.Date(2026, 5, 13, 7, 11, 32, 0, time.UTC)
+// ============ Бенчмарки ============
 
-	host := HostInfo{
-		Hostname: "Test",
-		BootTime: bootTime,
-	}
+func BenchmarkGetBootTime(b *testing.B) {
+	host := HostInfo{BootTime: 1747109492}
 
-	data, err := json.Marshal(host)
-	if err != nil {
-		t.Fatalf("JSON marshal failed: %v", err)
-	}
-
-	var restored HostInfo
-	err = json.Unmarshal(data, &restored)
-	if err != nil {
-		t.Fatalf("JSON unmarshal failed: %v", err)
-	}
-
-	// Время должно сохраниться с точностью до секунды
-	if !restored.BootTime.Equal(bootTime) {
-		t.Errorf("BootTime: %v != %v", restored.BootTime, bootTime)
+	b.ResetTimer()
+	for b.Loop() {
+		_ = host.GetBootTime()
 	}
 }
 
-func TestHostInfoVirtualMachine(t *testing.T) {
-	// Физическая машина
-	physical := HostInfo{
-		Hostname:         "IT-S",
-		PhysicalHostname: "IT-S",
-	}
+func BenchmarkGetBootTimeString(b *testing.B) {
+	host := HostInfo{BootTime: 1747109492}
 
-	if physical.PhysicalHostname != physical.Hostname {
-		t.Error("Physical machine should have same names")
-	}
-
-	// Виртуальная машина
-	virtual := HostInfo{
-		Hostname:         "VM-WEB-01",
-		PhysicalHostname: "HYPERV-HOST-01",
-	}
-
-	if virtual.PhysicalHostname == virtual.Hostname {
-		t.Error("Virtual machine should have different names")
+	b.ResetTimer()
+	for b.Loop() {
+		_ = host.GetBootTimeString()
 	}
 }
 
-func TestHostInfoBIOSFields(t *testing.T) {
-	host := HostInfo{
-		BIOSVendor:       "Hewlett-Packard",
-		BIOSVersion:      "J61 v03.85",
-		BIOSDate:         "11/19/2014",
-		BIOSMajorRelease: 3,
-		BIOSMinorRelease: 85,
-	}
+func BenchmarkGetUpTimeString(b *testing.B) {
+	host := HostInfo{UpTimeSeconds: 9798016}
 
-	if host.BIOSVendor == "" {
-		t.Error("BIOSVendor is empty")
-	}
-
-	if host.BIOSVersion == "" {
-		t.Error("BIOSVersion is empty")
-	}
-
-	if host.BIOSMajorRelease == 0 {
-		t.Error("BIOSMajorRelease is 0")
-	}
-}
-
-func TestHostInfoBaseBoardFields(t *testing.T) {
-	host := HostInfo{
-		BaseBoardManufacturer: "Hewlett-Packard",
-		BaseBoardProduct:      "1589",
-		BaseBoardVersion:      "0.00",
-	}
-
-	if host.BaseBoardManufacturer == "" {
-		t.Error("BaseBoardManufacturer is empty")
-	}
-
-	if host.BaseBoardProduct == "" {
-		t.Error("BaseBoardProduct is empty")
+	b.ResetTimer()
+	for b.Loop() {
+		_ = host.GetUpTimeString()
 	}
 }
 
 func BenchmarkHostInfoJSON(b *testing.B) {
 	host := HostInfo{
-		Hostname:      "IT-S",
-		FQDN:          "IT-S.rsa.rogsibal.ru",
-		Domain:        "rsa.rogsibal.ru",
-		UpTimeSeconds: 9798016,
-		BootTime:      time.Now(),
-		Manufacturer:  "Hewlett-Packard",
-		Model:         "HP Z420 Workstation",
-		BIOSVendor:    "Hewlett-Packard",
-		BIOSVersion:   "J61 v03.85",
+		Hostname:     "IT-S",
+		FQDN:         "IT-S.rsa.rogsibal.ru",
+		Manufacturer: "Hewlett-Packard",
+		Model:        "HP Z420 Workstation",
 	}
 
 	b.ResetTimer()
 	for b.Loop() {
 		_, _ = json.Marshal(host)
 	}
-}
-
-func BenchmarkHostInfoUnmarshalJSON(b *testing.B) {
-	host := HostInfo{
-		Hostname:      "IT-S",
-		FQDN:          "IT-S.rsa.rogsibal.ru",
-		Domain:        "rsa.rogsibal.ru",
-		UpTimeSeconds: 9798016,
-		BootTime:      time.Now(),
-		Manufacturer:  "Hewlett-Packard",
-		Model:         "HP Z420 Workstation",
-	}
-
-	data, _ := json.Marshal(host)
-
-	b.ResetTimer()
-	for b.Loop() {
-		var restored HostInfo
-		_ = json.Unmarshal(data, &restored)
-	}
-}
-
-// Вспомогательная функция
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && stringContains(s, substr)))
-}
-
-func stringContains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

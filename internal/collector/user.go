@@ -1,5 +1,4 @@
-// tracker/internal/collector/user.go
-
+// internal/collector/user.go
 //go:build windows
 
 package collector
@@ -24,6 +23,39 @@ const (
 	nameUserPrincipal = 8  // user@domain.com
 	nameDnsDomain     = 12 // Полное DNS имя домена
 )
+
+// Структура USER_INFO_3 для NetUserGetInfo
+type userInfo3 struct {
+	Name            *uint16
+	Password        *uint16
+	PasswordAge     uint32
+	Priv            uint32
+	HomeDir         *uint16
+	Comment         *uint16
+	Flags           uint32
+	ScriptPath      *uint16
+	AuthFlags       uint32
+	FullName        *uint16
+	UsrComment      *uint16
+	Parms           *uint16
+	Workstations    *uint16
+	LastLogon       uint32
+	LastLogoff      uint32
+	AcctExpires     uint32
+	MaxStorage      uint32
+	UnitsPerWeek    uint32
+	LogonHours      uintptr
+	BadPwCount      uint32
+	NumLogons       uint32
+	LogonServer     *uint16
+	CountryCode     uint32
+	CodePage        uint32
+	UserId          uint32
+	PrimaryGroupId  uint32
+	Profile         *uint16
+	HomeDirDrive    *uint16
+	PasswordExpired uint32
+}
 
 type UserCollector struct{}
 
@@ -51,8 +83,13 @@ func (c *UserCollector) Collect() (models.UserInfo, error) {
 
 	// 2. Полное имя пользователя
 	info.FullName = c.getUserName(nameDisplay)
-	if info.FullName == "" {
-		info.FullName = info.Username
+	if info.FullName == "" || info.FullName == info.Username {
+		// Пробуем получить из NetUserGetInfo
+		if fullName := c.getFullNameFromNetAPI(info.Username); fullName != "" {
+			info.FullName = fullName
+		} else {
+			info.FullName = info.Username
+		}
 	}
 
 	// 3. Полное DNS имя домена (если есть)
@@ -60,19 +97,13 @@ func (c *UserCollector) Collect() (models.UserInfo, error) {
 
 	// 4. Определяем тип пользователя
 	if info.DomainFull != "" {
-		// Доменный пользователь
 		info.IsDomainUser = true
 		info.IsLocalUser = false
+		info.Workgroup = ""
 	} else {
-		// Локальный пользователь
 		info.IsDomainUser = false
 		info.IsLocalUser = true
-
-		// Получаем рабочую группу
 		info.Workgroup = c.getWorkgroup()
-
-		// Для локального пользователя Domain = имя компьютера
-		// Очищаем, чтобы не путать с доменом
 		if !strings.Contains(info.Username, "\\") {
 			info.Domain = ""
 		}
@@ -139,21 +170,19 @@ func (c *UserCollector) getDomainFromRegistry() string {
 func (c *UserCollector) getWorkgroup() string {
 	k, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
-		`SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`,
+		`SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters`,
 		registry.QUERY_VALUE,
 	)
-	if err != nil {
-		return ""
-	}
-	defer func() {
-		_ = k.Close()
-	}()
-
-	if workgroup, _, err := k.GetStringValue("Domain"); err == nil && workgroup != "" {
-		return workgroup
+	if err == nil {
+		defer func() {
+			_ = k.Close()
+		}()
+		if wg, _, err := k.GetStringValue("Domain"); err == nil && wg != "" {
+			return wg
+		}
 	}
 
-	return ""
+	return "WORKGROUP"
 }
 
 // getUserName получает имя пользователя
@@ -163,15 +192,51 @@ func (c *UserCollector) getUserName(nameFormat uint32) string {
 
 	ret, _, _ := procGetUserNameEx.Call(
 		uintptr(nameFormat),
-		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(unsafe.Pointer(unsafe.SliceData(buffer))),
 		uintptr(unsafe.Pointer(&size)),
 	)
 
-	if ret == 0 {
+	if ret == 0 || size == 0 {
 		return ""
 	}
 
-	return syscall.UTF16ToString(buffer[:size])
+	return windows.UTF16ToString(buffer[:size])
+}
+
+// getFullNameFromNetAPI получает полное имя через NetUserGetInfo
+func (c *UserCollector) getFullNameFromNetAPI(username string) string {
+	// Извлекаем только имя пользователя (без домена)
+	userName := username
+	for i := len(username) - 1; i >= 0; i-- {
+		if username[i] == '\\' {
+			userName = username[i+1:]
+			break
+		}
+	}
+
+	userNamePtr, err := syscall.UTF16PtrFromString(userName)
+	if err != nil {
+		return ""
+	}
+
+	var userInfoPtr *userInfo3
+	ret, _, _ := procNetUserGetInfo.Call(
+		0, // NULL - локальный компьютер
+		uintptr(unsafe.Pointer(userNamePtr)),
+		3, // Уровень информации
+		uintptr(unsafe.Pointer(&userInfoPtr)),
+	)
+
+	if ret != 0 {
+		return ""
+	}
+	defer procNetApiBufferFree.Call(uintptr(unsafe.Pointer(userInfoPtr)))
+
+	if userInfoPtr.FullName != nil {
+		return syscall.UTF16ToString((*[256]uint16)(unsafe.Pointer(userInfoPtr.FullName))[:])
+	}
+
+	return ""
 }
 
 // isAdmin проверяет, является ли пользователь администратором

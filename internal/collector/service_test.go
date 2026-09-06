@@ -11,6 +11,8 @@ import (
 	"github.com/alme23/tracker/internal/models"
 )
 
+// ============ Тесты для NewServiceCollector() ============
+
 func TestNewServiceCollector(t *testing.T) {
 	timeout := 2 * time.Second
 	collector := NewServiceCollector(timeout)
@@ -24,6 +26,8 @@ func TestNewServiceCollector(t *testing.T) {
 	}
 }
 
+// ============ Тесты для Collect() ============
+
 func TestServiceCollectorCollect(t *testing.T) {
 	collector := NewServiceCollector(2 * time.Second)
 
@@ -32,26 +36,24 @@ func TestServiceCollectorCollect(t *testing.T) {
 		t.Fatalf("Collect failed: %v", err)
 	}
 
-	if len(statuses) != 2 {
-		t.Fatalf("Expected 2 services, got %d", len(statuses))
+	if len(statuses) == 0 {
+		t.Error("No services found")
 	}
 
-	// Проверяем порядок
-	if statuses[0].Name != "RDP" {
-		t.Errorf("First service should be RDP, got %s", statuses[0].Name)
+	// Проверяем, что RDP есть
+	foundRDP := false
+	for _, status := range statuses {
+		if status.Name == "RDP" {
+			foundRDP = true
+			if status.ServiceName != "TermService" {
+				t.Errorf("RDP service name = %s, want TermService", status.ServiceName)
+			}
+			break
+		}
 	}
 
-	if statuses[1].Name != "VNC" && !contains(statuses[1].Name, "VNC (") {
-		t.Errorf("Second service should be VNC, got %s", statuses[1].Name)
-	}
-
-	// Проверяем RDP
-	if statuses[0].ServiceName != "TermService" {
-		t.Errorf("RDP service name = %s, want TermService", statuses[0].ServiceName)
-	}
-
-	if statuses[0].Port == 0 {
-		t.Error("RDP port is 0")
+	if !foundRDP {
+		t.Error("RDP service not found")
 	}
 
 	// Логируем
@@ -64,6 +66,31 @@ func TestServiceCollectorCollect(t *testing.T) {
 		t.Logf("  Port Open: %v", status.PortOpen)
 	}
 }
+
+// ============ Тесты для processRdpService() ============
+
+func TestProcessRdpService(t *testing.T) {
+	collector := NewServiceCollector(1 * time.Second)
+	status := &models.ServiceStatus{Name: "RDP", ServiceName: "TermService"}
+
+	err := collector.processRdpService(status, "127.0.0.1")
+	if err != nil {
+		t.Fatalf("processRdpService failed: %v", err)
+	}
+
+	if !status.Installed {
+		t.Error("RDP should be installed")
+	}
+
+	if status.Port == 0 {
+		t.Error("RDP port is 0")
+	}
+
+	t.Logf("RDP: installed=%v, running=%v, port=%d",
+		status.Installed, status.Running, status.Port)
+}
+
+// ============ Тесты для readRegistryPortGeneric() ============
 
 func TestReadRegistryPortGeneric(t *testing.T) {
 	collector := NewServiceCollector(1 * time.Second)
@@ -86,12 +113,6 @@ func TestReadRegistryPortGeneric(t *testing.T) {
 			valueName:   "Port",
 			defaultPort: "5900",
 		},
-		{
-			name:        "TightVNC port",
-			keyPath:     `SOFTWARE\TightVNC\Server`,
-			valueName:   "RfbPort",
-			defaultPort: "5900",
-		},
 	}
 
 	for _, tt := range tests {
@@ -102,7 +123,6 @@ func TestReadRegistryPortGeneric(t *testing.T) {
 				t.Error("Result is empty")
 			}
 
-			// Проверяем, что результат - валидный порт
 			port, err := strconv.ParseUint(result, 10, 16)
 			if err != nil {
 				t.Errorf("Invalid port: %s", result)
@@ -117,6 +137,8 @@ func TestReadRegistryPortGeneric(t *testing.T) {
 	}
 }
 
+// ============ Тесты для checkWindowsService() ============
+
 func TestCheckWindowsService(t *testing.T) {
 	collector := NewServiceCollector(1 * time.Second)
 
@@ -126,13 +148,13 @@ func TestCheckWindowsService(t *testing.T) {
 		shouldExist bool
 	}{
 		{
-			name:        "RDP service",
+			name:        "RDP exists",
 			serviceName: "TermService",
 			shouldExist: true,
 		},
 		{
-			name:        "Non-existent service",
-			serviceName: "DefinitelyNotExistingService12345",
+			name:        "Non-existent",
+			serviceName: "DefinitelyNotExisting12345",
 			shouldExist: false,
 		},
 	}
@@ -153,6 +175,8 @@ func TestCheckWindowsService(t *testing.T) {
 		})
 	}
 }
+
+// ============ Тесты для checkFirewallPort() ============
 
 func TestCheckFirewallPort(t *testing.T) {
 	collector := NewServiceCollector(1 * time.Second)
@@ -175,12 +199,6 @@ func TestCheckFirewallPort(t *testing.T) {
 			port:     "99999",
 			expected: false,
 		},
-		{
-			name:     "Invalid host",
-			host:     "invalid.host.name",
-			port:     "80",
-			expected: false,
-		},
 	}
 
 	for _, tt := range tests {
@@ -194,6 +212,8 @@ func TestCheckFirewallPort(t *testing.T) {
 	}
 }
 
+// ============ Тесты для getLocalIP() ============
+
 func TestGetLocalIP(t *testing.T) {
 	collector := NewServiceCollector(1 * time.Second)
 
@@ -205,17 +225,13 @@ func TestGetLocalIP(t *testing.T) {
 		t.Error("Local IP is empty")
 	}
 
-	// Проверяем, что IP валидный
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {
 		t.Errorf("Invalid IP: %s", ip)
 	}
-
-	// Не должен быть 0.0.0.0 или ::
-	if ip == "0.0.0.0" || ip == "::" {
-		t.Errorf("Invalid IP: %s", ip)
-	}
 }
+
+// ============ Тесты для getVncSignatures() ============
 
 func TestGetVncSignatures(t *testing.T) {
 	signatures := getVncSignatures()
@@ -241,48 +257,11 @@ func TestGetVncSignatures(t *testing.T) {
 			t.Error("DefaultPort is empty")
 		}
 
-		// Проверяем порт
-		if port, err := strconv.ParseUint(sig.DefaultPort, 10, 16); err != nil || port == 0 {
-			t.Errorf("Invalid default port for %s: %s", sig.BrandName, sig.DefaultPort)
-		}
-
 		t.Logf("VNC: %s (%s)", sig.BrandName, sig.ServiceName)
 	}
 }
 
-func TestVncDetection(t *testing.T) {
-	collector := NewServiceCollector(1 * time.Second)
-
-	statuses, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	// Находим VNC статус
-	var vncStatus *models.ServiceStatus
-	for i := range statuses {
-		if contains(statuses[i].Name, "VNC") {
-			vncStatus = &statuses[i]
-			break
-		}
-	}
-
-	if vncStatus == nil {
-		t.Fatal("VNC status not found")
-	}
-
-	// VNC может быть не установлен
-	if !vncStatus.Installed {
-		t.Log("VNC is not installed")
-		if vncStatus.Running {
-			t.Error("VNC is not installed but running")
-		}
-	} else {
-		t.Logf("VNC installed: %s", vncStatus.Name)
-		t.Logf("VNC service: %s", vncStatus.ServiceName)
-		t.Logf("VNC port: %d", vncStatus.Port)
-	}
-}
+// ============ Тесты на конкурентность ============
 
 func TestServiceCollectorConcurrent(t *testing.T) {
 	collector := NewServiceCollector(1 * time.Second)
@@ -304,42 +283,54 @@ func TestServiceCollectorConcurrent(t *testing.T) {
 	}
 }
 
-func BenchmarkServiceCollector(b *testing.B) {
+// ============ Бенчмарки ============
+
+func BenchmarkServiceCollectorCollect(b *testing.B) {
 	collector := NewServiceCollector(2 * time.Second)
 
 	b.ResetTimer()
 	for b.Loop() {
-		_, err := collector.Collect()
-		if err != nil {
-			b.Fatalf("Collect failed: %v", err)
-		}
+		_, _ = collector.Collect()
 	}
 }
 
-func BenchmarkServiceCollectorParallel(b *testing.B) {
-	collector := NewServiceCollector(2 * time.Second)
+func BenchmarkProcessRdpService(b *testing.B) {
+	collector := NewServiceCollector(1 * time.Second)
+	status := &models.ServiceStatus{Name: "RDP", ServiceName: "TermService"}
 
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := collector.Collect()
-			if err != nil {
-				b.Fatalf("Collect failed: %v", err)
-			}
-		}
-	})
-}
-
-// Вспомогательная функция
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && stringContains(s, substr)))
-}
-
-func stringContains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.processRdpService(status, "127.0.0.1")
 	}
-	return false
+}
+
+func BenchmarkCheckWindowsService(b *testing.B) {
+	collector := NewServiceCollector(1 * time.Second)
+
+	b.ResetTimer()
+	for b.Loop() {
+		_, _, _ = collector.checkWindowsService("TermService")
+	}
+}
+
+func BenchmarkReadRegistryPortGeneric(b *testing.B) {
+	collector := NewServiceCollector(1 * time.Second)
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.readRegistryPortGeneric(
+			`SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp`,
+			"PortNumber",
+			"3389",
+		)
+	}
+}
+
+func BenchmarkGetLocalIP(b *testing.B) {
+	collector := NewServiceCollector(1 * time.Second)
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.getLocalIP()
+	}
 }

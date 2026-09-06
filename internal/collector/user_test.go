@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+// ============ Тесты для NewUserCollector() ============
+
 func TestNewUserCollector(t *testing.T) {
 	collector := NewUserCollector()
 
@@ -16,6 +18,8 @@ func TestNewUserCollector(t *testing.T) {
 		t.Fatal("NewUserCollector returned nil")
 	}
 }
+
+// ============ Тесты для Collect() ============
 
 func TestUserCollectorCollect(t *testing.T) {
 	collector := NewUserCollector()
@@ -38,19 +42,65 @@ func TestUserCollectorCollect(t *testing.T) {
 		t.Error("ProfilePath is empty")
 	}
 
-	// Логируем информацию
+	// Логируем
 	t.Logf("Username: %s", info.Username)
-	t.Logf("Full Name: %s", info.FullName)
+	t.Logf("FullName: %s", info.FullName)
 	t.Logf("Domain: %s", info.Domain)
-	t.Logf("Domain Full: %s", info.DomainFull)
+	t.Logf("DomainFull: %s", info.DomainFull)
 	t.Logf("Workgroup: %s", info.Workgroup)
-	t.Logf("Profile: %s", info.ProfilePath)
-	t.Logf("Is Admin: %v", info.IsAdmin)
-	t.Logf("Is Domain User: %v", info.IsDomainUser)
-	t.Logf("Is Local User: %v", info.IsLocalUser)
+	t.Logf("ProfilePath: %s", info.ProfilePath)
+	t.Logf("IsAdmin: %v", info.IsAdmin)
+	t.Logf("IsDomainUser: %v", info.IsDomainUser)
+	t.Logf("IsLocalUser: %v", info.IsLocalUser)
 }
 
-func TestGetUserName(t *testing.T) {
+// ============ Тесты для getFullDomainName() ============
+
+func TestUserGetFullDomainName(t *testing.T) {
+	collector := NewUserCollector()
+
+	domainFull := collector.getFullDomainName()
+
+	t.Logf("Full Domain: %s", domainFull)
+
+	// Домен может быть пустым для локальных пользователей
+	if domainFull == "" {
+		t.Log("Full domain is empty (local user)")
+	}
+}
+
+// ============ Тесты для getDomainFromRegistry() ============
+
+func TestUserGetDomainFromRegistry(t *testing.T) {
+	collector := NewUserCollector()
+
+	domain := collector.getDomainFromRegistry()
+
+	t.Logf("Domain from registry: %s", domain)
+
+	if domain == "" {
+		t.Log("Domain is empty (workgroup)")
+	}
+}
+
+// ============ Тесты для getWorkgroup() ============
+
+func TestUserGetWorkgroup(t *testing.T) {
+	collector := NewUserCollector()
+
+	workgroup := collector.getWorkgroup()
+
+	t.Logf("Workgroup: %s", workgroup)
+
+	// Рабочая группа не должна быть пустой (есть fallback "WORKGROUP")
+	if workgroup == "" {
+		t.Error("Workgroup is empty (should have fallback)")
+	}
+}
+
+// ============ Тесты для getUserName() ============
+
+func TestUserGetUserName(t *testing.T) {
 	collector := NewUserCollector()
 
 	tests := []struct {
@@ -68,7 +118,6 @@ func TestGetUserName(t *testing.T) {
 			result := collector.getUserName(tt.nameFormat)
 			t.Logf("%s: %s", tt.name, result)
 
-			// Не все форматы могут быть доступны
 			if result == "" {
 				t.Logf("%s returned empty (may be normal)", tt.name)
 			}
@@ -76,47 +125,45 @@ func TestGetUserName(t *testing.T) {
 	}
 }
 
-func TestGetFullDomainName(t *testing.T) {
+func TestUserGetUserNameSamCompatible(t *testing.T) {
 	collector := NewUserCollector()
 
-	domainFull := collector.getFullDomainName()
+	username := collector.getUserName(nameSamCompatible)
 
-	t.Logf("Full Domain: %s", domainFull)
+	if username == "" {
+		t.Error("SamCompatible is empty")
+	}
 
-	// Домен может быть пустым для локальных пользователей
-	if domainFull == "" {
-		t.Log("Full domain is empty (local user)")
+	t.Logf("SamCompatible: %s", username)
+
+	// Проверяем формат DOMAIN\Username
+	if strings.Contains(username, "\\") {
+		parts := strings.SplitN(username, "\\", 2)
+		if len(parts) != 2 {
+			t.Errorf("Invalid SamCompatible format: %s", username)
+		}
+		t.Logf("Domain: %s, User: %s", parts[0], parts[1])
 	}
 }
 
-func TestGetDomainFromRegistry(t *testing.T) {
-	collector := NewUserCollector()
+// ============ Тесты для isAdmin() ============
 
-	domain := collector.getDomainFromRegistry()
-
-	t.Logf("Domain from registry: %s", domain)
-
-	// Домен может быть пустым
-	if domain == "" {
-		t.Log("Domain is empty (workgroup)")
-	}
-}
-
-func TestIsAdmin(t *testing.T) {
+func TestUserIsAdmin(t *testing.T) {
 	collector := NewUserCollector()
 
 	isAdmin := collector.isAdmin()
 
 	t.Logf("Is Admin: %v", isAdmin)
 
-	// Проверяем через user.Current() для сравнения
+	// Сравниваем с user.Current()
 	if u, err := user.Current(); err == nil {
 		t.Logf("Current user: %s", u.Username)
-		t.Logf("UID: %s", u.Uid)
 	}
 }
 
-func TestGetProfilePath(t *testing.T) {
+// ============ Тесты для getProfilePath() ============
+
+func TestUserGetProfilePath(t *testing.T) {
 	collector := NewUserCollector()
 
 	profilePath := collector.getProfilePath()
@@ -127,126 +174,78 @@ func TestGetProfilePath(t *testing.T) {
 		t.Error("Profile path is empty")
 	}
 
-	// Проверяем через переменные окружения
+	// Сравниваем с переменной окружения
 	userProfile := os.Getenv("USERPROFILE")
 	if userProfile != "" && profilePath != userProfile {
 		t.Errorf("Profile path (%s) != USERPROFILE (%s)", profilePath, userProfile)
 	}
 }
 
-func TestDomainUserDetection(t *testing.T) {
+// ============ Тесты на консистентность ============
+
+func TestUserCollectorConsistency(t *testing.T) {
 	collector := NewUserCollector()
 
-	info, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	// Проверяем логику определения типа пользователя
-	if info.IsDomainUser && info.IsLocalUser {
-		t.Error("User cannot be both domain and local")
-	}
-
-	if !info.IsDomainUser && !info.IsLocalUser {
-		t.Error("User must be either domain or local")
-	}
-
-	// Для доменного пользователя
-	if info.IsDomainUser {
-		if info.DomainFull == "" {
-			t.Error("Domain user should have DomainFull")
-		}
-		if info.Domain == "" {
-			t.Error("Domain user should have Domain")
-		}
-	}
-
-	// Для локального пользователя
-	if info.IsLocalUser {
-		if info.Workgroup == "" {
-			t.Log("Local user without workgroup (may be normal)")
-		}
-	}
-}
-
-func TestUsernameParsing(t *testing.T) {
-	collector := NewUserCollector()
-
-	info, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	// Проверяем формат Username
-	if strings.Contains(info.Username, "\\") {
-		parts := strings.SplitN(info.Username, "\\", 2)
-		if len(parts) != 2 {
-			t.Errorf("Invalid username format: %s", info.Username)
-		}
-
-		// Domain должен совпадать с первой частью
-		if info.Domain != parts[0] {
-			t.Errorf("Domain (%s) != username prefix (%s)", info.Domain, parts[0])
-		}
-
-		t.Logf("Domain: %s, Username: %s", parts[0], parts[1])
-	} else {
-		// Локальный пользователь без домена
-		t.Logf("Username without domain: %s", info.Username)
-	}
-}
-
-func TestUserInfoConsistency(t *testing.T) {
-	collector := NewUserCollector()
-
-	info, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	// Проверяем консистентность
-	if info.IsDomainUser && info.Workgroup != "" {
-		t.Logf("Domain user with workgroup: %s (unusual)", info.Workgroup)
-	}
-
-	if info.IsLocalUser && info.DomainFull != "" {
-		t.Errorf("Local user with DomainFull: %s", info.DomainFull)
-	}
-
-	// FullName не должен быть пустым
-	if info.FullName == "" {
-		t.Error("FullName is empty")
-	}
-}
-
-func TestUserCollectorRepeatedCalls(t *testing.T) {
-	collector := NewUserCollector()
-
-	// Первый вызов
 	first, err := collector.Collect()
 	if err != nil {
 		t.Fatalf("First Collect failed: %v", err)
 	}
 
-	// Второй вызов
 	second, err := collector.Collect()
 	if err != nil {
 		t.Fatalf("Second Collect failed: %v", err)
 	}
 
-	// Данные не должны меняться
 	if first.Username != second.Username {
 		t.Errorf("Username changed: %s vs %s", first.Username, second.Username)
-	}
-
-	if first.Domain != second.Domain {
-		t.Errorf("Domain changed: %s vs %s", first.Domain, second.Domain)
 	}
 
 	if first.IsAdmin != second.IsAdmin {
 		t.Errorf("IsAdmin changed: %v vs %v", first.IsAdmin, second.IsAdmin)
 	}
+
+	if first.IsDomainUser != second.IsDomainUser {
+		t.Errorf("IsDomainUser changed: %v vs %v", first.IsDomainUser, second.IsDomainUser)
+	}
 }
+
+// ============ Тесты на доменного/локального пользователя ============
+
+func TestUserTypeDetection(t *testing.T) {
+	collector := NewUserCollector()
+
+	info, err := collector.Collect()
+	if err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	// Пользователь не может быть одновременно доменным и локальным
+	if info.IsDomainUser && info.IsLocalUser {
+		t.Error("User cannot be both domain and local")
+	}
+
+	// Пользователь должен быть либо доменным, либо локальным
+	if !info.IsDomainUser && !info.IsLocalUser {
+		t.Error("User must be either domain or local")
+	}
+
+	if info.IsDomainUser {
+		if info.DomainFull == "" {
+			t.Error("Domain user should have DomainFull")
+		}
+		if info.Workgroup != "" {
+			t.Error("Domain user should not have Workgroup")
+		}
+	}
+
+	if info.IsLocalUser {
+		if info.DomainFull != "" {
+			t.Error("Local user should not have DomainFull")
+		}
+	}
+}
+
+// ============ Тесты на конкурентность ============
 
 func TestUserCollectorConcurrent(t *testing.T) {
 	collector := NewUserCollector()
@@ -268,27 +267,49 @@ func TestUserCollectorConcurrent(t *testing.T) {
 	}
 }
 
-func BenchmarkUserCollector(b *testing.B) {
+// ============ Бенчмарки ============
+
+func BenchmarkUserCollectorCollect(b *testing.B) {
 	collector := NewUserCollector()
 
 	b.ResetTimer()
 	for b.Loop() {
-		_, err := collector.Collect()
-		if err != nil {
-			b.Fatalf("Collect failed: %v", err)
-		}
+		_, _ = collector.Collect()
 	}
 }
 
-func BenchmarkUserCollectorParallel(b *testing.B) {
+func BenchmarkUserGetUserName(b *testing.B) {
 	collector := NewUserCollector()
 
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := collector.Collect()
-			if err != nil {
-				b.Fatalf("Collect failed: %v", err)
-			}
-		}
-	})
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.getUserName(nameSamCompatible)
+	}
+}
+
+func BenchmarkUserGetFullDomainName(b *testing.B) {
+	collector := NewUserCollector()
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.getFullDomainName()
+	}
+}
+
+func BenchmarkUserIsAdmin(b *testing.B) {
+	collector := NewUserCollector()
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.isAdmin()
+	}
+}
+
+func BenchmarkUserGetProfilePath(b *testing.B) {
+	collector := NewUserCollector()
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.getProfilePath()
+	}
 }

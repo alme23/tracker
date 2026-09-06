@@ -11,7 +11,6 @@ import (
 	"unsafe"
 
 	"github.com/alme23/tracker/internal/models"
-	"golang.org/x/sys/windows"
 )
 
 // Системные константы для работы с таблицами прошивки
@@ -74,10 +73,6 @@ func (c *RAMCollector) Collect() (models.RAMInfo, error) {
 
 // getPhysicalSticksFromSMBIOS считывает прошивку и вытаскивает информацию о слотах памяти
 func (c *RAMCollector) getPhysicalSticksFromSMBIOS() ([]models.RAMStick, error) {
-	// Добавляем отсутствующую процедуру в локальный или глобальный контекст, если её нет в windows.go
-	modKernel32 := windows.NewLazySystemDLL("kernel32.dll")
-	procGetSystemFirmwareTable := modKernel32.NewProc("GetSystemFirmwareTable")
-
 	// Делаем первый вызов, чтобы узнать точный размер таблицы SMBIOS в байтах
 	ret, _, _ := procGetSystemFirmwareTable.Call(
 		uintptr(providerRSMB),

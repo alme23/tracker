@@ -15,6 +15,7 @@ var (
 	procGetComputerNameEx                = modKernel32.NewProc("GetComputerNameExW")
 	procGetTimeZoneInformation           = modKernel32.NewProc("GetTimeZoneInformation")
 	procGetFirmwareEnvironmentVariable   = modKernel32.NewProc("GetFirmwareEnvironmentVariableW")
+	procGetSystemFirmwareTable           = modKernel32.NewProc("GetSystemFirmwareTable")
 	procGetSystemDefaultLocaleName       = modKernel32.NewProc("GetSystemDefaultLocaleName")
 
 	modNtdll          = syscall.NewLazyDLL("ntdll.dll")
@@ -22,6 +23,9 @@ var (
 
 	modAdvapi32              = syscall.NewLazyDLL("advapi32.dll")
 	modSecur32               = syscall.NewLazyDLL("secur32.dll")
+	modNetapi32              = syscall.NewLazyDLL("netapi32.dll")
 	procGetUserNameEx        = modSecur32.NewProc("GetUserNameExW")
 	procCheckTokenMembership = modAdvapi32.NewProc("CheckTokenMembership")
+	procNetUserGetInfo       = modNetapi32.NewProc("NetUserGetInfo")
+	procNetApiBufferFree     = modNetapi32.NewProc("NetApiBufferFree")
 )

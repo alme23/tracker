@@ -3,11 +3,8 @@
 package collector
 
 import (
-	"fmt"
-	"os"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/alme23/tracker/internal/models"
 )
@@ -41,8 +38,8 @@ func TestHostCollectorCollect(t *testing.T) {
 		t.Error("UpTimeSeconds is 0")
 	}
 
-	if info.BootTime.IsZero() {
-		t.Error("BootTime is zero")
+	if info.BootTime == 0 {
+		t.Error("BootTime is 0")
 	}
 
 	if info.TimeZone == "" {
@@ -52,14 +49,20 @@ func TestHostCollectorCollect(t *testing.T) {
 	// Логируем
 	t.Logf("Hostname: %s", info.Hostname)
 	t.Logf("FQDN: %s", info.FQDN)
+	t.Logf("PhysicalHostname: %s", info.PhysicalHostname)
+	t.Logf("PhysicalFQDN: %s", info.PhysicalFQDN)
 	t.Logf("Domain: %s", info.Domain)
-	t.Logf("Uptime: %d seconds", info.UpTimeSeconds)
+	t.Logf("Workgroup: %s", info.Workgroup)
+	t.Logf("UpTime: %d seconds", info.UpTimeSeconds)
+	t.Logf("BootTime: %d (%s)", info.BootTime, time.Unix(int64(info.BootTime), 0).Format("2006-01-02 15:04:05"))
 	t.Logf("TimeZone: %s (offset %d)", info.TimeZone, info.TimeZoneOffset)
+	t.Logf("Manufacturer: %s", info.Manufacturer)
+	t.Logf("Model: %s", info.Model)
 }
 
 // ============ Тесты для getComputerName() ============
 
-func TestGetComputerName(t *testing.T) {
+func TestHostGetComputerName(t *testing.T) {
 	collector := NewHostCollector()
 
 	tests := []struct {
@@ -88,23 +91,20 @@ func TestGetComputerName(t *testing.T) {
 	}
 }
 
-func TestGetComputerNameDNS(t *testing.T) {
+func TestHostGetComputerNameEmpty(t *testing.T) {
 	collector := NewHostCollector()
 
-	hostname := collector.getComputerName(computerNameDnsHostname)
+	// Передаем невалидный тип
+	result := collector.getComputerName(999)
 
-	if hostname == "" {
-		t.Error("DNS hostname is empty")
+	if result != "" {
+		t.Errorf("Invalid name type should return empty, got: %s", result)
 	}
-
-	// Сравниваем с os.Hostname()
-	osHostname, _ := os.Hostname()
-	t.Logf("DNS: %s, os.Hostname: %s", hostname, osHostname)
 }
 
 // ============ Тесты для getWorkgroup() ============
 
-func TestGetWorkgroup(t *testing.T) {
+func TestHostGetWorkgroup(t *testing.T) {
 	collector := NewHostCollector()
 
 	workgroup := collector.getWorkgroup()
@@ -119,18 +119,18 @@ func TestGetWorkgroup(t *testing.T) {
 
 // ============ Тесты для getUpTimeSeconds() ============
 
-func TestGetUpTimeSeconds(t *testing.T) {
+func TestHostGetUpTimeSeconds(t *testing.T) {
 	collector := NewHostCollector()
 
 	uptime := collector.getUpTimeSeconds()
 
-	t.Logf("Uptime: %d seconds (%s)", uptime, formatDuration(uptime))
+	t.Logf("Uptime: %d seconds", uptime)
 
 	if uptime == 0 {
 		t.Error("Uptime is 0")
 	}
 
-	// Проверяем, что uptime не слишком большой (больше 100 лет)
+	// Проверяем, что аптайм не слишком большой (больше 100 лет)
 	if uptime > 100*365*24*3600 {
 		t.Errorf("Uptime is too large: %d", uptime)
 	}
@@ -138,7 +138,7 @@ func TestGetUpTimeSeconds(t *testing.T) {
 
 // ============ Тесты для getTimeZone() ============
 
-func TestGetTimeZone(t *testing.T) {
+func TestHostGetTimeZone(t *testing.T) {
 	collector := NewHostCollector()
 
 	zoneName, offset := collector.getTimeZone()
@@ -156,26 +156,9 @@ func TestGetTimeZone(t *testing.T) {
 	}
 }
 
-func TestGetTimeZoneDirectCall(t *testing.T) {
-	var tzInfo timeZoneInformation
-
-	ret, _, _ := procGetTimeZoneInformation.Call(
-		uintptr(unsafe.Pointer(&tzInfo)),
-	)
-
-	t.Logf("GetTimeZoneInformation returned: %d", ret)
-	t.Logf("Bias: %d", tzInfo.Bias)
-	t.Logf("StandardBias: %d", tzInfo.StandardBias)
-	t.Logf("DaylightBias: %d", tzInfo.DaylightBias)
-
-	if ret == 0xFFFFFFFF {
-		t.Error("GetTimeZoneInformation failed")
-	}
-}
-
 // ============ Тесты для collectHardwareInfo() ============
 
-func TestCollectHardwareInfo(t *testing.T) {
+func TestHostCollectHardwareInfo(t *testing.T) {
 	collector := NewHostCollector()
 	info := &models.HostInfo{}
 
@@ -202,22 +185,54 @@ func TestCollectHardwareInfo(t *testing.T) {
 	}
 }
 
-// ============ Вспомогательные функции ============
+// ============ Тесты на консистентность ============
 
-func formatDuration(seconds uint64) string {
-	duration := time.Duration(seconds) * time.Second
+func TestHostCollectorConsistency(t *testing.T) {
+	collector := NewHostCollector()
 
-	days := int(duration.Hours() / 24)
-	hours := int(duration.Hours()) % 24
-	minutes := int(duration.Minutes()) % 60
-
-	if days > 0 {
-		return fmt.Sprintf("%d days, %d hours, %d minutes", days, hours, minutes)
+	first, err := collector.Collect()
+	if err != nil {
+		t.Fatalf("First Collect failed: %v", err)
 	}
-	if hours > 0 {
-		return fmt.Sprintf("%d hours, %d minutes", hours, minutes)
+
+	second, err := collector.Collect()
+	if err != nil {
+		t.Fatalf("Second Collect failed: %v", err)
 	}
-	return fmt.Sprintf("%d minutes", minutes)
+
+	if first.Hostname != second.Hostname {
+		t.Errorf("Hostname changed: %s vs %s", first.Hostname, second.Hostname)
+	}
+
+	if first.BootTime != second.BootTime {
+		t.Errorf("BootTime changed: %d vs %d", first.BootTime, second.BootTime)
+	}
+
+	if first.TimeZoneOffset != second.TimeZoneOffset {
+		t.Errorf("TimeZoneOffset changed: %d vs %d", first.TimeZoneOffset, second.TimeZoneOffset)
+	}
+}
+
+// ============ Тесты на конкурентность ============
+
+func TestHostCollectorConcurrent(t *testing.T) {
+	collector := NewHostCollector()
+
+	const numGoroutines = 10
+	errChan := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			_, err := collector.Collect()
+			errChan <- err
+		}()
+	}
+
+	for i := 0; i < numGoroutines; i++ {
+		if err := <-errChan; err != nil {
+			t.Errorf("Concurrent Collect failed: %v", err)
+		}
+	}
 }
 
 // ============ Бенчмарки ============
@@ -231,7 +246,7 @@ func BenchmarkHostCollectorCollect(b *testing.B) {
 	}
 }
 
-func BenchmarkGetComputerName(b *testing.B) {
+func BenchmarkHostGetComputerName(b *testing.B) {
 	collector := NewHostCollector()
 
 	b.ResetTimer()
@@ -240,16 +255,7 @@ func BenchmarkGetComputerName(b *testing.B) {
 	}
 }
 
-func BenchmarkGetWorkgroup(b *testing.B) {
-	collector := NewHostCollector()
-
-	b.ResetTimer()
-	for b.Loop() {
-		_ = collector.getWorkgroup()
-	}
-}
-
-func BenchmarkGetUpTimeSeconds(b *testing.B) {
+func BenchmarkHostGetUpTimeSeconds(b *testing.B) {
 	collector := NewHostCollector()
 
 	b.ResetTimer()
@@ -258,7 +264,7 @@ func BenchmarkGetUpTimeSeconds(b *testing.B) {
 	}
 }
 
-func BenchmarkGetTimeZone(b *testing.B) {
+func BenchmarkHostGetTimeZone(b *testing.B) {
 	collector := NewHostCollector()
 
 	b.ResetTimer()
@@ -267,7 +273,7 @@ func BenchmarkGetTimeZone(b *testing.B) {
 	}
 }
 
-func BenchmarkCollectHardwareInfo(b *testing.B) {
+func BenchmarkHostCollectHardwareInfo(b *testing.B) {
 	collector := NewHostCollector()
 	info := &models.HostInfo{}
 

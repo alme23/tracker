@@ -34,9 +34,17 @@ func TestNetworkCollectorCollect(t *testing.T) {
 	}
 
 	t.Logf("Found %d network interfaces", len(statuses))
+
+	for _, iface := range statuses {
+		t.Logf("Interface %d: %s (%s)", iface.Index, iface.Name, iface.Description)
+		t.Logf("  Type: %s, MAC: %s, Operational: %v",
+			iface.Type.String(), iface.MAC, iface.Operational)
+		t.Logf("  IP Assignment: %s", iface.IPAssignment)
+		t.Logf("  IP Addresses: %v", iface.IPAddresses)
+	}
 }
 
-// ============ Проверка данных ============
+// ============ Проверка целостности данных ============
 
 func TestNetworkCollectorDataIntegrity(t *testing.T) {
 	collector := NewNetworkCollector()
@@ -55,7 +63,7 @@ func TestNetworkCollectorDataIntegrity(t *testing.T) {
 		indexMap[iface.Index] = true
 	}
 
-	// Проверка MAC-адресов
+	// Проверка MAC
 	for _, iface := range statuses {
 		if iface.MAC != "" {
 			mac, err := net.ParseMAC(iface.MAC)
@@ -68,7 +76,7 @@ func TestNetworkCollectorDataIntegrity(t *testing.T) {
 		}
 	}
 
-	// Проверка IP-адресов
+	// Проверка IP
 	for _, iface := range statuses {
 		for _, ip := range iface.IPAddresses {
 			if ip == nil {

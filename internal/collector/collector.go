@@ -42,25 +42,14 @@ func NewSystemCollector(dialTimeout time.Duration) *SystemCollector {
 // CollectAll запускает параллельный сбор со всех коллекторов и склеивает результаты в единый snapshot
 func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 	snapshot := &models.SystemSnapshot{
-		Timestamp: time.Now(),
+		Timestamp: time.Now().Unix(), // Теперь int64
 	}
 
 	var g errgroup.Group
 	var mu sync.Mutex
 
-	// 1. Коллектор операционной системы
-	g.Go(func() error {
-		osData, err := sc.osColl.Collect()
-		if err != nil {
-			return fmt.Errorf("OS collector: %w", err)
-		}
-		mu.Lock()
-		snapshot.OS = osData
-		mu.Unlock()
-		return nil
-	})
-
-	// 2. Коллектор сетевых интерфейсов
+	// ПРИОРИТЕТ 1: Запускаем сетевые и портовые коллекторы первыми.
+	// Пока они ждут ответа от сокетов и сетевого стека, процессор успеет разобрать весь реестр.
 	g.Go(func() error {
 		networkData, err := sc.networkColl.Collect()
 		if err != nil {
@@ -72,7 +61,6 @@ func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 		return nil
 	})
 
-	// 3. Коллектор Windows-служб (RDP/VNC)
 	g.Go(func() error {
 		servicesData, err := sc.serviceColl.Collect()
 		if err != nil {
@@ -84,7 +72,18 @@ func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 		return nil
 	})
 
-	// 4. Коллектор процессора
+	// ПРИОРИТЕТ 2: Мгновенные коллекторы (WinAPI/SMBIOS/Реестр)
+	g.Go(func() error {
+		osData, err := sc.osColl.Collect()
+		if err != nil {
+			return fmt.Errorf("OS collector: %w", err)
+		}
+		mu.Lock()
+		snapshot.OS = osData
+		mu.Unlock()
+		return nil
+	})
+
 	g.Go(func() error {
 		procData, err := sc.processorColl.Collect()
 		if err != nil {

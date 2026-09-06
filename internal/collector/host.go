@@ -71,7 +71,14 @@ func (c *HostCollector) Collect() (models.HostInfo, error) {
 
 	// 7. Аптайм
 	info.UpTimeSeconds = c.getUpTimeSeconds()
-	info.BootTime = time.Now().Add(-time.Duration(info.UpTimeSeconds) * time.Second)
+
+	currentTime := uint64(time.Now().Unix())
+	if info.UpTimeSeconds < currentTime {
+		info.BootTime = currentTime - info.UpTimeSeconds
+	} else {
+		// Если аптайм больше текущего времени (маловероятно), ставим 0
+		info.BootTime = 0
+	}
 
 	// 8. Часовой пояс
 	info.TimeZone, info.TimeZoneOffset = c.getTimeZone()
@@ -103,25 +110,41 @@ func (c *HostCollector) getComputerName(nameType uint32) string {
 	return syscall.UTF16ToString(buffer[:size])
 }
 
-// getWorkgroup получает рабочую группу
+// getWorkgroup получает рабочую группу (замените этот метод в host.go)
 func (c *HostCollector) getWorkgroup() string {
-	k, err := registry.OpenKey(
+	// 1. Пробуем прочитать из параметров LanmanWorkstation
+	netKey, err := registry.OpenKey(
+		registry.LOCAL_MACHINE,
+		`SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters`,
+		registry.QUERY_VALUE,
+	)
+	if err == nil {
+		defer func() {
+			_ = netKey.Close()
+		}()
+		if wg, _, err := netKey.GetStringValue("Domain"); err == nil && wg != "" {
+			return wg
+		}
+	}
+
+	// 2. Если там пусто, пробуем прочитать из параметров Tcpip (резервный вариант)
+	tcpKey, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
 		`SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`,
 		registry.QUERY_VALUE,
 	)
-	if err != nil {
-		return ""
+	if err == nil {
+		defer func() {
+			_ = tcpKey.Close()
+		}()
+		// Проверяем именно параметр Workgroup, который создается для незадоменных ПК
+		if wg, _, err := tcpKey.GetStringValue("Workgroup"); err == nil && wg != "" {
+			return wg
+		}
 	}
-	defer func() {
-		_ = k.Close()
-	}()
 
-	if workgroup, _, err := k.GetStringValue("Domain"); err == nil {
-		return workgroup
-	}
-
-	return ""
+	// 3. Гарантированный дефолтный фолбек для Windows локальных машин
+	return "WORKGROUP"
 }
 
 // getUpTimeSeconds получает время работы в секундах

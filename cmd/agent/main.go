@@ -1,35 +1,27 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
+	"context"
 	"log"
 	"time"
 
-	"github.com/alme23/tracker/internal/collector"
+	"github.com/alme23/tracker/internal/agent"
 )
 
 func main() {
-	startTime := time.Now()
-	log.Println("Запуск агента сбора данных...")
-
-	// Инициализируем единый оркестратор
-	sysCollector := collector.NewSystemCollector(1 * time.Second)
-
-	// Вызываем один метод, который делает всю тяжелую работу параллельно
-	snapshot, err := sysCollector.CollectAll()
-	if err != nil {
-		log.Fatalf("Критическая ошибка при сборе метрик: %v", err)
+	cfg := agent.Config{
+		ServerAddr:   "localhost:8443",
+		SharedSecret: "test-secret-key",
+		Timeout:      10 * time.Second,
 	}
 
-	// Форматируем результат в JSON для вывода в консоль
-	jsonData, err := json.MarshalIndent(snapshot.RAM, "", "  ")
-	if err != nil {
-		log.Fatalf("Ошибка маршалинга JSON: %v", err)
+	a := agent.New(cfg)
+
+	ctx := context.Background()
+
+	if err := a.RunOnce(ctx); err != nil {
+		log.Fatalf("Ошибка: %v", err)
 	}
 
-	fmt.Println("\n=== СЛЕПОК СИСТЕМЫ (JSON) ===")
-	fmt.Println(string(jsonData))
-
-	log.Printf("Сбор успешно завершен за %v\n", time.Since(startTime))
+	log.Println("Готово")
 }

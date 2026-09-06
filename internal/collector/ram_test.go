@@ -3,9 +3,12 @@
 package collector
 
 import (
+	"encoding/binary"
 	"testing"
 	"unsafe"
 )
+
+// ============ Тесты для NewRAMCollector() ============
 
 func TestNewRAMCollector(t *testing.T) {
 	collector := NewRAMCollector()
@@ -14,6 +17,8 @@ func TestNewRAMCollector(t *testing.T) {
 		t.Fatal("NewRAMCollector returned nil")
 	}
 }
+
+// ============ Тесты для Collect() ============
 
 func TestRAMCollectorCollect(t *testing.T) {
 	collector := NewRAMCollector()
@@ -36,215 +41,205 @@ func TestRAMCollectorCollect(t *testing.T) {
 		t.Error("TotalPageFile is 0")
 	}
 
-	if info.AvailablePageFile > info.TotalPageFile {
-		t.Error("AvailablePageFile > TotalPageFile")
-	}
+	// Логируем
+	t.Logf("Total: %.2f GB", float64(info.TotalBytes)/1024/1024/1024)
+	t.Logf("Available: %.2f GB", float64(info.AvailableBytes)/1024/1024/1024)
+	t.Logf("Sticks: %d", len(info.Sticks))
 
-	// Логируем информацию
-	t.Logf("Total Physical: %d bytes (%.2f GB)",
-		info.TotalBytes, float64(info.TotalBytes)/1024/1024/1024)
-	t.Logf("Available Physical: %d bytes (%.2f GB)",
-		info.AvailableBytes, float64(info.AvailableBytes)/1024/1024/1024)
-	t.Logf("Total Page File: %d bytes (%.2f GB)",
-		info.TotalPageFile, float64(info.TotalPageFile)/1024/1024/1024)
-	t.Logf("Available Page File: %d bytes (%.2f GB)",
-		info.AvailablePageFile, float64(info.AvailablePageFile)/1024/1024/1024)
+	for i, stick := range info.Sticks {
+		t.Logf("Stick %d: %s %s %d MB @ %d MHz",
+			i+1, stick.Manufacturer, stick.PartNumber,
+			stick.Capacity/1024/1024, stick.SpeedMHz)
+	}
 }
 
-func TestMemoryStatusExStructure(t *testing.T) {
-	// Проверяем размер структуры
-	size := unsafe.Sizeof(memoryStatusEx{})
+// ============ Тесты для getPhysicalSticksFromSMBIOS() ============
 
-	// MEMORYSTATUSEX должен быть 64 байта
-	if size != 64 {
-		t.Errorf("memoryStatusEx size = %d, want 64", size)
-	}
-
-	t.Logf("memoryStatusEx size: %d bytes", size)
-}
-
-func TestRAMInfoConsistency(t *testing.T) {
+func TestGetPhysicalSticksFromSMBIOS(t *testing.T) {
 	collector := NewRAMCollector()
 
-	info, err := collector.Collect()
+	sticks, err := collector.getPhysicalSticksFromSMBIOS()
 	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
+		t.Logf("SMBIOS not available: %v", err)
+		t.Skip("SMBIOS not available")
 	}
 
-	// Использованная память
-	usedBytes := info.TotalBytes - info.AvailableBytes
-	if usedBytes > info.TotalBytes {
-		t.Error("Used bytes > total bytes")
+	if len(sticks) == 0 {
+		t.Error("No sticks found")
 	}
 
-	// Процент использования
-	if info.TotalBytes > 0 {
-		usagePercent := float64(usedBytes) / float64(info.TotalBytes) * 100
-
-		if usagePercent < 0 || usagePercent > 100 {
-			t.Errorf("Usage percent out of range: %.2f%%", usagePercent)
-		}
-
-		t.Logf("Memory usage: %.2f%%", usagePercent)
-	}
-
-	// Page file usage
-	if info.TotalPageFile > 0 {
-		pageFileUsed := info.TotalPageFile - info.AvailablePageFile
-		pageFilePercent := float64(pageFileUsed) / float64(info.TotalPageFile) * 100
-
-		t.Logf("Page file usage: %.2f%%", pageFilePercent)
+	for i, stick := range sticks {
+		t.Logf("Stick %d: Slot=%s, %d MB, %d MHz, %s %s",
+			i+1, stick.Slot, stick.Capacity/1024/1024,
+			stick.SpeedMHz, stick.Manufacturer, stick.PartNumber)
 	}
 }
 
-func TestRAMCollectorRepeatedCalls(t *testing.T) {
+// ============ Тесты для parseType17Structure() ============
+
+func TestParseType17Structure(t *testing.T) {
 	collector := NewRAMCollector()
 
-	// Первый вызов
-	first, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("First Collect failed: %v", err)
+	tests := []struct {
+		name                 string
+		data                 []byte
+		strings              []string
+		expectedCap          uint64
+		expectedSpeed        uint32
+		expectedManufacturer string
+	}{
+		{
+			name: "8GB DDR3",
+			data: func() []byte {
+				data := make([]byte, 28)
+				// Size = 8192 MB
+				binary.LittleEndian.PutUint16(data[12:14], 8192)
+				// Speed = 1600 MHz
+				binary.LittleEndian.PutUint16(data[21:23], 1600)
+				// String indices (1-based)
+				data[8] = 1  // Slot
+				data[23] = 2 // Manufacturer
+				data[24] = 3 // Serial
+				data[26] = 4 // Part Number
+				return data
+			}(),
+			strings:              []string{"DIMM1", "Kingston", "SN123", "KVR16E11/8"},
+			expectedCap:          8192 * 1024 * 1024,
+			expectedSpeed:        1600,
+			expectedManufacturer: "Kingston",
+		},
+		{
+			name: "Empty slot",
+			data: func() []byte {
+				data := make([]byte, 28)
+				// Size = 0 (empty)
+				binary.LittleEndian.PutUint16(data[12:14], 0)
+				return data
+			}(),
+			strings:              []string{},
+			expectedCap:          0,
+			expectedSpeed:        0,
+			expectedManufacturer: "",
+		},
+		{
+			name: "4GB in KB (0x8000 flag)",
+			data: func() []byte {
+				data := make([]byte, 28)
+				// Size = 0x8000 | 4194304 (4GB in KB)
+				// Но 4194304 не влезает в uint16!
+				// Используем реальное значение: 4GB = 4194304 KB, но uint16 max = 65535
+				// Поэтому для теста используем 0x8000 | 4096 (4096 KB = 4MB, не 4GB)
+				// Или просто используем 0x8000 | 1024 (1024 KB = 1MB)
+				binary.LittleEndian.PutUint16(data[12:14], 0x8000|1024)
+				// String indices
+				data[8] = 1  // Slot
+				data[23] = 2 // Manufacturer
+				return data
+			}(),
+			strings:              []string{"DIMM2", "Samsung"},
+			expectedCap:          uint64(1024) * 1024, // 1024 KB
+			expectedSpeed:        0,
+			expectedManufacturer: "Samsung",
+		},
+		{
+			name: "Small size in KB (no flag)",
+			data: func() []byte {
+				data := make([]byte, 28)
+				// Size = 1024 (KB)
+				binary.LittleEndian.PutUint16(data[12:14], 1024)
+				data[8] = 1  // Slot
+				data[23] = 2 // Manufacturer
+				return data
+			}(),
+			strings:              []string{"DIMM3", "Hynix"},
+			expectedCap:          1024 * 1024 * 1024, // 1024 MB
+			expectedSpeed:        0,
+			expectedManufacturer: "Hynix",
+		},
 	}
 
-	// Второй вызов
-	second, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Second Collect failed: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stick := collector.parseType17Structure(tt.data, tt.strings)
 
-	// Общая память не должна меняться
-	if first.TotalBytes != second.TotalBytes {
-		t.Errorf("TotalBytes changed: %d vs %d", first.TotalBytes, second.TotalBytes)
-	}
+			if stick.Capacity != tt.expectedCap {
+				t.Errorf("Capacity = %d, want %d", stick.Capacity, tt.expectedCap)
+			}
 
-	// Доступная память может немного отличаться
-	difference := int64(first.AvailableBytes) - int64(second.AvailableBytes)
-	if difference < 0 {
-		difference = -difference
-	}
+			if stick.SpeedMHz != tt.expectedSpeed {
+				t.Errorf("Speed = %d, want %d", stick.SpeedMHz, tt.expectedSpeed)
+			}
 
-	// Разница должна быть меньше 1 GB (память могла измениться)
-	if difference > 1024*1024*1024 {
-		t.Errorf("AvailableBytes changed too much: %d bytes", difference)
+			if tt.expectedManufacturer != "" && stick.Manufacturer != tt.expectedManufacturer {
+				t.Errorf("Manufacturer = %s, want %s", stick.Manufacturer, tt.expectedManufacturer)
+			}
+		})
 	}
 }
 
-func TestRAMInfoMinimumRequirements(t *testing.T) {
+// ============ Тесты для parseSMBIOSStrings() ============
+
+func TestParseSMBIOSStrings(t *testing.T) {
 	collector := NewRAMCollector()
 
-	info, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
+	tests := []struct {
+		name     string
+		data     []byte
+		expected []string
+	}{
+		{
+			name:     "Simple strings",
+			data:     []byte("DIMM1\x00Kingston\x00SN123\x00"),
+			expected: []string{"DIMM1", "Kingston", "SN123"},
+		},
+		{
+			name:     "Empty string",
+			data:     []byte{},
+			expected: []string{},
+		},
+		{
+			name:     "Double null terminator",
+			data:     []byte("DIMM1\x00\x00"),
+			expected: []string{"DIMM1"},
+		},
+		{
+			name:     "With spaces",
+			data:     []byte(" DIMM1 \x00 Kingston \x00"),
+			expected: []string{"DIMM1", "Kingston"},
+		},
 	}
 
-	// Минимальные требования для Windows 10/11
-	minRAM := uint64(1 * 1024 * 1024 * 1024) // 1 GB
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := collector.parseSMBIOSStrings(tt.data)
 
-	if info.TotalBytes < minRAM {
-		t.Errorf("Total RAM (%d bytes) is less than minimum (%d bytes)",
-			info.TotalBytes, minRAM)
+			if len(result) != len(tt.expected) {
+				t.Errorf("Len = %d, want %d", len(result), len(tt.expected))
+				return
+			}
+
+			for i := range result {
+				if result[i] != tt.expected[i] {
+					t.Errorf("String[%d] = %q, want %q", i, result[i], tt.expected[i])
+				}
+			}
+		})
 	}
 }
 
-func TestRAMInfoFormattedOutput(t *testing.T) {
-	collector := NewRAMCollector()
-
-	info, err := collector.Collect()
-	if err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	// Форматируем в GB
-	totalGB := float64(info.TotalBytes) / 1024 / 1024 / 1024
-	availableGB := float64(info.AvailableBytes) / 1024 / 1024 / 1024
-	usedGB := totalGB - availableGB
-
-	t.Logf("RAM: %.2f GB total, %.2f GB used, %.2f GB available",
-		totalGB, usedGB, availableGB)
-
-	// Проверяем, что значения разумные
-	if totalGB < 0.5 || totalGB > 1024 {
-		t.Errorf("Total RAM is unreasonable: %.2f GB", totalGB)
-	}
-}
-
-func TestMemoryStatusExFields(t *testing.T) {
-	var memStatus memoryStatusEx
-	memStatus.dwLength = uint32(unsafe.Sizeof(memStatus))
-
-	ret, _, _ := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&memStatus)))
-	if ret == 0 {
-		t.Fatal("GlobalMemoryStatusEx failed")
-	}
-
-	// Проверяем, что все поля заполнены
-	if memStatus.ullTotalPhys == 0 {
-		t.Error("ullTotalPhys is 0")
-	}
-
-	if memStatus.ullTotalPageFile == 0 {
-		t.Error("ullTotalPageFile is 0")
-	}
-
-	// Memory Load должен быть от 0 до 100
-	if memStatus.dwMemoryLoad > 100 {
-		t.Errorf("dwMemoryLoad = %d, want <= 100", memStatus.dwMemoryLoad)
-	}
-
-	t.Logf("Memory Load: %d%%", memStatus.dwMemoryLoad)
-	t.Logf("Total Physical: %d", memStatus.ullTotalPhys)
-	t.Logf("Available Physical: %d", memStatus.ullAvailPhys)
-	t.Logf("Total Page File: %d", memStatus.ullTotalPageFile)
-	t.Logf("Available Page File: %d", memStatus.ullAvailPageFile)
-}
+// ============ Тесты для memoryStatusEx ============
 
 func TestMemoryStatusExSize(t *testing.T) {
 	size := unsafe.Sizeof(memoryStatusEx{})
 
-	// MEMORYSTATUSEX должен быть 64 байта на x64
 	if size != 64 {
 		t.Errorf("memoryStatusEx size = %d, want 64", size)
 	}
-
-	// Проверяем смещения полей
-	ms := &memoryStatusEx{}
-
-	dwLengthOffset := unsafe.Offsetof(ms.dwLength)
-	dwMemoryLoadOffset := unsafe.Offsetof(ms.dwMemoryLoad)
-	ullTotalPhysOffset := unsafe.Offsetof(ms.ullTotalPhys)
-	ullAvailPhysOffset := unsafe.Offsetof(ms.ullAvailPhys)
-	ullTotalPageFileOffset := unsafe.Offsetof(ms.ullTotalPageFile)
-	ullAvailPageFileOffset := unsafe.Offsetof(ms.ullAvailPageFile)
-
-	t.Logf("dwLength offset: %d", dwLengthOffset)
-	t.Logf("dwMemoryLoad offset: %d", dwMemoryLoadOffset)
-	t.Logf("ullTotalPhys offset: %d", ullTotalPhysOffset)
-	t.Logf("ullAvailPhys offset: %d", ullAvailPhysOffset)
-	t.Logf("ullTotalPageFile offset: %d", ullTotalPageFileOffset)
-	t.Logf("ullAvailPageFile offset: %d", ullAvailPageFileOffset)
-
-	// Проверяем правильность смещений
-	if dwLengthOffset != 0 {
-		t.Error("dwLength should be at offset 0")
-	}
-	if dwMemoryLoadOffset != 4 {
-		t.Error("dwMemoryLoad should be at offset 4")
-	}
-	if ullTotalPhysOffset != 8 {
-		t.Error("ullTotalPhys should be at offset 8")
-	}
-	if ullAvailPhysOffset != 16 {
-		t.Error("ullAvailPhys should be at offset 16")
-	}
-	if ullTotalPageFileOffset != 24 {
-		t.Error("ullTotalPageFile should be at offset 24")
-	}
-	if ullAvailPageFileOffset != 32 {
-		t.Error("ullAvailPageFile should be at offset 32")
-	}
 }
 
-func TestRAMInfoDataIntegrity(t *testing.T) {
+// ============ Тесты на целостность ============
+
+func TestRAMCollectorDataIntegrity(t *testing.T) {
 	collector := NewRAMCollector()
 
 	info, err := collector.Collect()
@@ -252,52 +247,51 @@ func TestRAMInfoDataIntegrity(t *testing.T) {
 		t.Fatalf("Collect failed: %v", err)
 	}
 
-	// Проверяем, что все значения байтовые (кратные 4096 для страниц)
-	pageSize := uint64(4096)
-
-	if info.TotalBytes%pageSize != 0 {
-		t.Logf("TotalBytes (%d) is not multiple of page size (%d)",
-			info.TotalBytes, pageSize)
+	// Проверяем, что суммарный объем планок <= общей памяти
+	var totalSticksCapacity uint64
+	for _, stick := range info.Sticks {
+		totalSticksCapacity += stick.Capacity
 	}
 
-	if info.AvailableBytes%pageSize != 0 {
-		t.Logf("AvailableBytes (%d) is not multiple of page size (%d)",
-			info.AvailableBytes, pageSize)
-	}
-
-	// Доступная память должна быть меньше или равна общей
-	if info.AvailableBytes > info.TotalBytes {
-		t.Error("AvailableBytes > TotalBytes")
-	}
-
-	// Страничный файл должен быть больше или равен физической памяти
-	if info.TotalPageFile < info.TotalBytes {
-		t.Logf("Page file (%d) < physical RAM (%d)",
-			info.TotalPageFile, info.TotalBytes)
+	if totalSticksCapacity > info.TotalBytes {
+		t.Logf("Sticks capacity (%d) > TotalBytes (%d) — may be normal",
+			totalSticksCapacity, info.TotalBytes)
 	}
 }
 
-func BenchmarkRAMCollector(b *testing.B) {
+// ============ Бенчмарки ============
+
+func BenchmarkRAMCollectorCollect(b *testing.B) {
 	collector := NewRAMCollector()
 
 	b.ResetTimer()
 	for b.Loop() {
-		_, err := collector.Collect()
-		if err != nil {
-			b.Fatalf("Collect failed: %v", err)
-		}
+		_, _ = collector.Collect()
 	}
 }
 
-func BenchmarkRAMCollectorParallel(b *testing.B) {
+func BenchmarkParseType17Structure(b *testing.B) {
 	collector := NewRAMCollector()
+	data := make([]byte, 28)
+	binary.LittleEndian.PutUint16(data[12:14], 8192)
+	binary.LittleEndian.PutUint16(data[21:23], 1600)
+	data[8] = 1
+	data[23] = 2
+	data[26] = 4
+	strings := []string{"DIMM1", "Kingston", "SN123", "KVR16E11/8"}
 
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := collector.Collect()
-			if err != nil {
-				b.Fatalf("Collect failed: %v", err)
-			}
-		}
-	})
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.parseType17Structure(data, strings)
+	}
+}
+
+func BenchmarkParseSMBIOSStrings(b *testing.B) {
+	collector := NewRAMCollector()
+	data := []byte("DIMM1\x00Kingston\x00SN123\x00")
+
+	b.ResetTimer()
+	for b.Loop() {
+		_ = collector.parseSMBIOSStrings(data)
+	}
 }

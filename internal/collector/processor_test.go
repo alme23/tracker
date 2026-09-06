@@ -335,7 +335,7 @@ func BenchmarkProcessorCollectorCollect(b *testing.B) {
 	collector := NewProcessorCollector()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = collector.Collect()
 	}
 }
@@ -345,7 +345,7 @@ func BenchmarkCollectFromRegistry(b *testing.B) {
 	info := &models.ProcessorInfo{}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = collector.collectFromRegistry(info)
 	}
 }
@@ -355,7 +355,7 @@ func BenchmarkEnrichProcessorTopology(b *testing.B) {
 	info := &models.ProcessorInfo{}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		collector.enrichProcessorTopology(info)
 	}
 }
@@ -368,7 +368,7 @@ func BenchmarkParseCache(b *testing.B) {
 	binary.LittleEndian.PutUint32(structBytes[12:16], 64*1024)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		collector.parseCache(structBytes, info)
 	}
 }

@@ -38,3 +38,7 @@ AGENT.md
 
 # Skip linters result
 *.txt
+
+# Skip database
+*.db
+*.wal
