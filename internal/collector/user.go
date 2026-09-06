@@ -1,4 +1,3 @@
-// internal/collector/user.go
 //go:build windows
 
 package collector
@@ -15,16 +14,16 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// Константы для GetUserNameEx
+// Constants for GetUserNameEx
 const (
 	nameUnknown       = 0
 	nameSamCompatible = 2  // DOMAIN\Username
-	nameDisplay       = 3  // Полное имя пользователя
+	nameDisplay       = 3  // Full display name
 	nameUserPrincipal = 8  // user@domain.com
-	nameDnsDomain     = 12 // Полное DNS имя домена
+	nameDNSDomain     = 12 // Full DNS domain name
 )
 
-// Структура USER_INFO_3 для NetUserGetInfo
+// USER_INFO_3 structure for NetUserGetInfo
 type userInfo3 struct {
 	Name            *uint16
 	Password        *uint16
@@ -50,24 +49,26 @@ type userInfo3 struct {
 	LogonServer     *uint16
 	CountryCode     uint32
 	CodePage        uint32
-	UserId          uint32
-	PrimaryGroupId  uint32
+	UserID          uint32
+	PrimaryGroupID  uint32
 	Profile         *uint16
 	HomeDirDrive    *uint16
 	PasswordExpired uint32
 }
 
+// UserCollector collects information about the current user
 type UserCollector struct{}
 
+// NewUserCollector creates a new UserCollector
 func NewUserCollector() *UserCollector {
 	return &UserCollector{}
 }
 
-// Collect собирает информацию о текущем пользователе
+// Collect gathers information about the current user
 func (c *UserCollector) Collect() (models.UserInfo, error) {
 	info := models.UserInfo{}
 
-	// 1. Получаем имя пользователя в формате DOMAIN\Username (SamCompatible)
+	// 1. Get username in DOMAIN\Username format (SamCompatible)
 	info.Username = c.getUserName(nameSamCompatible)
 	if info.Username == "" {
 		if u, err := user.Current(); err == nil {
@@ -75,16 +76,16 @@ func (c *UserCollector) Collect() (models.UserInfo, error) {
 		}
 	}
 
-	// Извлекаем короткое имя домена из SamCompatible
+	// Extract short domain name from SamCompatible
 	if strings.Contains(info.Username, "\\") {
 		parts := strings.SplitN(info.Username, "\\", 2)
 		info.Domain = parts[0]
 	}
 
-	// 2. Полное имя пользователя
+	// 2. Full display name
 	info.FullName = c.getUserName(nameDisplay)
 	if info.FullName == "" || info.FullName == info.Username {
-		// Пробуем получить из NetUserGetInfo
+		// Try to get from NetUserGetInfo
 		if fullName := c.getFullNameFromNetAPI(info.Username); fullName != "" {
 			info.FullName = fullName
 		} else {
@@ -92,10 +93,10 @@ func (c *UserCollector) Collect() (models.UserInfo, error) {
 		}
 	}
 
-	// 3. Полное DNS имя домена (если есть)
+	// 3. Full DNS domain name (if available)
 	info.DomainFull = c.getFullDomainName()
 
-	// 4. Определяем тип пользователя
+	// 4. Determine user type
 	if info.DomainFull != "" {
 		info.IsDomainUser = true
 		info.IsLocalUser = false
@@ -109,31 +110,31 @@ func (c *UserCollector) Collect() (models.UserInfo, error) {
 		}
 	}
 
-	// 5. Проверяем права администратора
+	// 5. Check administrator rights
 	info.IsAdmin = c.isAdmin()
 
-	// 6. Путь к профилю
+	// 6. Profile path
 	info.ProfilePath = c.getProfilePath()
 
 	return info, nil
 }
 
-// getFullDomainName получает полное DNS имя домена
+// getFullDomainName returns the full DNS domain name
 func (c *UserCollector) getFullDomainName() string {
-	// Способ 1: Из UPN (user@domain.com)
+	// Method 1: From UPN (user@domain.com)
 	upn := c.getUserName(nameUserPrincipal)
 	if strings.Contains(upn, "@") {
 		parts := strings.SplitN(upn, "@", 2)
 		return parts[1]
 	}
 
-	// Способ 2: Из DNS Domain
-	dnsDomain := c.getUserName(nameDnsDomain)
+	// Method 2: From DNS Domain
+	dnsDomain := c.getUserName(nameDNSDomain)
 	if dnsDomain != "" && !strings.Contains(dnsDomain, "\\") {
 		return dnsDomain
 	}
 
-	// Способ 3: Из реестра
+	// Method 3: From registry
 	if domain := c.getDomainFromRegistry(); domain != "" {
 		return domain
 	}
@@ -141,7 +142,7 @@ func (c *UserCollector) getFullDomainName() string {
 	return ""
 }
 
-// getDomainFromRegistry получает полное имя домена из реестра
+// getDomainFromRegistry returns the full domain name from the registry
 func (c *UserCollector) getDomainFromRegistry() string {
 	k, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
@@ -166,7 +167,7 @@ func (c *UserCollector) getDomainFromRegistry() string {
 	return ""
 }
 
-// getWorkgroup получает имя рабочей группы
+// getWorkgroup returns the workgroup name
 func (c *UserCollector) getWorkgroup() string {
 	k, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
@@ -185,7 +186,7 @@ func (c *UserCollector) getWorkgroup() string {
 	return "WORKGROUP"
 }
 
-// getUserName получает имя пользователя
+// getUserName returns the user name in the specified format
 func (c *UserCollector) getUserName(nameFormat uint32) string {
 	var size uint32 = 256
 	buffer := make([]uint16, size)
@@ -203,9 +204,9 @@ func (c *UserCollector) getUserName(nameFormat uint32) string {
 	return windows.UTF16ToString(buffer[:size])
 }
 
-// getFullNameFromNetAPI получает полное имя через NetUserGetInfo
+// getFullNameFromNetAPI returns the full name via NetUserGetInfo
 func (c *UserCollector) getFullNameFromNetAPI(username string) string {
-	// Извлекаем только имя пользователя (без домена)
+	// Extract only the username (without domain)
 	userName := username
 	for i := len(username) - 1; i >= 0; i-- {
 		if username[i] == '\\' {
@@ -221,16 +222,24 @@ func (c *UserCollector) getFullNameFromNetAPI(username string) string {
 
 	var userInfoPtr *userInfo3
 	ret, _, _ := procNetUserGetInfo.Call(
-		0, // NULL - локальный компьютер
+		0,
 		uintptr(unsafe.Pointer(userNamePtr)),
-		3, // Уровень информации
+		3,
 		uintptr(unsafe.Pointer(&userInfoPtr)),
 	)
 
-	if ret != 0 {
+	if ret != 0 || userInfoPtr == nil {
 		return ""
 	}
-	defer procNetApiBufferFree.Call(uintptr(unsafe.Pointer(userInfoPtr)))
+
+	// Free memory
+	defer func() {
+		ret, _, _ := procNetAPIBufferFree.Call(uintptr(unsafe.Pointer(userInfoPtr)))
+		if ret != 0 {
+			// Free error — ignore
+			_ = ret
+		}
+	}()
 
 	if userInfoPtr.FullName != nil {
 		return syscall.UTF16ToString((*[256]uint16)(unsafe.Pointer(userInfoPtr.FullName))[:])
@@ -239,7 +248,7 @@ func (c *UserCollector) getFullNameFromNetAPI(username string) string {
 	return ""
 }
 
-// isAdmin проверяет, является ли пользователь администратором
+// isAdmin checks if the user is an administrator
 func (c *UserCollector) isAdmin() bool {
 	sid, err := windows.StringToSid("S-1-5-32-544")
 	if err != nil {
@@ -256,7 +265,7 @@ func (c *UserCollector) isAdmin() bool {
 	return ret != 0 && isMember
 }
 
-// getProfilePath получает путь к профилю
+// getProfilePath returns the user profile path
 func (c *UserCollector) getProfilePath() string {
 	if profile := os.Getenv("USERPROFILE"); profile != "" {
 		return profile

@@ -1,5 +1,3 @@
-// tracker/internal/collector/os.go
-
 //go:build windows
 
 package collector
@@ -18,7 +16,7 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// Константы продуктов Windows
+// Windows product constants
 const (
 	PRODUCT_BUSINESS                            = 0x00000006
 	PRODUCT_BUSINESS_N                          = 0x00000010
@@ -158,13 +156,13 @@ const (
 	PRODUCT_WINDOWS_10_HOME_N_EVAL              = 0x000000D8
 )
 
-// RTL_OSVERSIONINFOEXW структура для RtlGetVersion
+// RTL_OSVERSIONINFOEXW structure for RtlGetVersion
 type rtlOSVersionInfoEx struct {
 	OSVersionInfoSize uint32
 	MajorVersion      uint32
 	MinorVersion      uint32
 	BuildNumber       uint32
-	PlatformId        uint32
+	PlatformID        uint32
 	CSDVersion        [128]uint16
 	ServicePackMajor  uint16
 	ServicePackMinor  uint16
@@ -173,7 +171,7 @@ type rtlOSVersionInfoEx struct {
 	Reserved          byte
 }
 
-// osDetails содержит всю информацию об ОС
+// osDetails contains all OS information
 type osDetails struct {
 	name             string
 	edition          string
@@ -186,19 +184,21 @@ type osDetails struct {
 	displayVersion   string
 }
 
+// OSCollector collects information about the operating system
 type OSCollector struct {
 	cache     *models.OSInfo
 	cacheTime time.Time
 	mu        sync.RWMutex
 }
 
+// NewOSCollector creates a new OSCollector
 func NewOSCollector() *OSCollector {
 	return &OSCollector{}
 }
 
-// Collect собирает расширенную информацию об ОС Windows
+// Collect gathers detailed information about the Windows OS
 func (c *OSCollector) Collect() (models.OSInfo, error) {
-	// Проверяем кэш (действителен 5 минут)
+	// Check cache (valid for 5 minutes)
 	c.mu.RLock()
 	if c.cache != nil && time.Since(c.cacheTime) < 5*time.Minute {
 		cached := *c.cache
@@ -209,13 +209,13 @@ func (c *OSCollector) Collect() (models.OSInfo, error) {
 
 	var info models.OSInfo
 
-	// Архитектура
+	// Architecture
 	info.Architecture = c.getArchitecture()
 
-	// Получаем все данные из одного источника
+	// Get all data from a single source
 	details := c.getOSDetails()
 
-	// Заполняем основные поля
+	// Fill main fields
 	info.Name = details.name
 	info.Edition = details.edition
 	info.BuildNumber = details.buildNumber
@@ -225,18 +225,18 @@ func (c *OSCollector) Collect() (models.OSInfo, error) {
 	info.RegisteredOrg = details.registeredOrg
 	info.InstallationType = details.installationType
 
-	// Дополнительная информация
+	// Additional information
 	info.Locale = c.getSystemLocale()
 	info.InstallDate = c.getInstallDate()
 	info.SecureBootLines = c.isSecureBootEnabled()
 	info.PowerShellVer = c.getPowerShellVersion()
 	info.MachineGUID = c.getMachineGUID()
 
-	// Виртуализация
+	// Virtualization
 	info.IsVirtual = c.checkVirtualization()
 	info.IsHypervisor = c.checkHypervisorHost()
 
-	// Сохраняем в кэш
+	// Save to cache
 	c.mu.Lock()
 	infoCopy := info
 	c.cache = &infoCopy
@@ -246,7 +246,7 @@ func (c *OSCollector) Collect() (models.OSInfo, error) {
 	return info, nil
 }
 
-// getArchitecture определяет архитектуру процессора
+// getArchitecture determines the processor architecture
 func (c *OSCollector) getArchitecture() models.ArchFamilyType {
 	switch runtime.GOARCH {
 	case "amd64":
@@ -276,28 +276,28 @@ func (c *OSCollector) getArchitecture() models.ArchFamilyType {
 	}
 }
 
-// getOSDetails собирает всю информацию об ОС за один проход
+// getOSDetails collects all OS information in one pass
 func (c *OSCollector) getOSDetails() osDetails {
 	d := osDetails{
 		name:             "Windows",
-		edition:          "UNKNOWN",
+		edition:          UNKNOWN,
 		buildNumber:      "0",
 		kernelVersion:    "0.0.0",
-		productID:        "UNKNOWN",
-		registeredOwner:  "UNKNOWN",
-		registeredOrg:    "UNKNOWN",
-		installationType: "UNKNOWN",
+		productID:        UNKNOWN,
+		registeredOwner:  UNKNOWN,
+		registeredOrg:    UNKNOWN,
+		installationType: UNKNOWN,
 	}
 
-	// Получаем версию через RtlGetVersion (теперь 4 значения)
+	// Get version via RtlGetVersion
 	major, minor, build, _ := c.getWindowsVersionNumbers()
 	d.buildNumber = fmt.Sprintf("%d", build)
 	d.kernelVersion = fmt.Sprintf("%d.%d.%d", major, minor, build)
 
-	// Получаем точное название Windows на основе мажорных версий и билдов
+	// Get exact Windows name based on major versions and builds
 	d.name = c.getWindowsVersionName(major, minor, build)
 
-	// Открываем реестр один раз
+	// Open registry once
 	regKey, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
 		`SOFTWARE\Microsoft\Windows NT\CurrentVersion`,
@@ -310,16 +310,15 @@ func (c *OSCollector) getOSDetails() osDetails {
 		_ = regKey.Close()
 	}()
 
-	// Читаем данные из реестра.
-	// ProductName больше не перезаписывает d.name безусловно, так как в Win11/Server22+ реестр врет!
+	// Read data from registry
 	if productName, _, err := regKey.GetStringValue("ProductName"); err == nil {
-		// Используем как запасной вариант, только если базовый маппинг не справился
+		// Use as fallback only if basic mapping didn't work
 		if strings.HasPrefix(d.name, "Windows ") && strings.Contains(d.name, fmt.Sprintf("%d.%d", major, minor)) {
 			d.name = productName
 		}
 	}
 
-	// Добавляем версию релиза (например, 23H2, 24H2) к названию
+	// Add release version (e.g., 23H2, 24H2) to the name
 	if displayVer, _, err := regKey.GetStringValue("DisplayVersion"); err == nil && displayVer != "" {
 		d.displayVersion = displayVer
 		if !strings.Contains(strings.ToLower(d.name), strings.ToLower(displayVer)) {
@@ -343,11 +342,11 @@ func (c *OSCollector) getOSDetails() osDetails {
 		d.installationType = installType
 	}
 
-	// Получаем редакцию через GetProductInfo (с нашей исправленной валидацией ret == 0)
+	// Get edition via GetProductInfo
 	d.edition = c.getEditionFromAPI(major, minor)
 
-	// Если не удалось через API, пробуем из реестра
-	if d.edition == "UNKNOWN" || d.edition == "PRODUCT_UNDEFINED" {
+	// Fallback to registry if API failed
+	if d.edition == UNKNOWN || d.edition == PRODUCT_UNDEFINED {
 		if edition, _, err := regKey.GetStringValue("EditionID"); err == nil {
 			d.edition = edition
 		}
@@ -356,18 +355,19 @@ func (c *OSCollector) getOSDetails() osDetails {
 	return d
 }
 
-// getWindowsVersionNumbers получает версию Windows через RtlGetVersion
+// getWindowsVersionNumbers gets the Windows version via RtlGetVersion
 func (c *OSCollector) getWindowsVersionNumbers() (major, minor, build uint32, isServer bool) {
 	var versionInfo rtlOSVersionInfoEx
 	versionInfo.OSVersionInfoSize = uint32(unsafe.Sizeof(versionInfo))
 
+	// #nosec G103 -- safe use of unsafe.Pointer with local struct
 	ret, _, _ := procRtlGetVersion.Call(
 		uintptr(unsafe.Pointer(&versionInfo)),
 	)
 
 	if ret == 0 {
-		// VER_NT_WORKSTATION (1) — это обычная десктопная Windows
-		// VER_NT_DOMAIN_CONTROLLER (2) и VER_NT_SERVER (3) — сервера
+		// VER_NT_WORKSTATION (1) is a desktop Windows
+		// VER_NT_DOMAIN_CONTROLLER (2) and VER_NT_SERVER (3) are servers
 		isServer = versionInfo.ProductType != 1
 		return versionInfo.MajorVersion, versionInfo.MinorVersion, versionInfo.BuildNumber, isServer
 	}
@@ -375,17 +375,15 @@ func (c *OSCollector) getWindowsVersionNumbers() (major, minor, build uint32, is
 	return 10, 0, 0, false
 }
 
-// getWindowsVersionName возвращает название Windows
+// getWindowsVersionName returns the Windows version name
 func (c *OSCollector) getWindowsVersionName(major, minor, build uint32) string {
-	// Получаем информацию о сервере
 	_, _, _, isServer := c.getWindowsVersionNumbers()
 
-	// Сначала обрабатываем главную мажорную ветку
 	switch major {
 	case 10:
 		if minor == 0 {
 			if build >= 22000 {
-				// Windows 11 или Windows Server 2022+
+				// Windows 11 or Windows Server 2022+
 				if isServer {
 					if build >= 26100 {
 						return "Windows Server 2025"
@@ -394,7 +392,7 @@ func (c *OSCollector) getWindowsVersionName(major, minor, build uint32) string {
 				}
 				return "Windows 11"
 			}
-			// Windows 10 или Windows Server 2016/2019
+			// Windows 10 or Windows Server 2016/2019
 			if isServer {
 				if build >= 17763 {
 					return "Windows Server 2019"
@@ -443,19 +441,17 @@ func (c *OSCollector) getWindowsVersionName(major, minor, build uint32) string {
 		}
 	}
 
-	// Дефолтный вариант для серверов или новых версий
 	if isServer {
 		return fmt.Sprintf("Windows Server %d.%d", major, minor)
 	}
 	return fmt.Sprintf("Windows %d.%d", major, minor)
 }
 
-// getEditionFromAPI получает редакцию через GetProductInfo
+// getEditionFromAPI gets the edition via GetProductInfo
 func (c *OSCollector) getEditionFromAPI(major, minor uint32) string {
 	var returnedType uint32
 
-	// Обратите внимание: GetProductInfo принимает DWORD (uint32).
-	// Мы передаем 0, 0 в качестве Service Pack major/minor, как требует API для актуальных ОС.
+	// #nosec G103 -- safe use of unsafe.Pointer with local variable
 	ret, _, _ := procGetProductInfo.Call(
 		uintptr(major),
 		uintptr(minor),
@@ -464,12 +460,12 @@ func (c *OSCollector) getEditionFromAPI(major, minor uint32) string {
 		uintptr(unsafe.Pointer(&returnedType)),
 	)
 
-	// Если возвращен 0 (FALSE), значит вызов функции WinAPI завершился ошибкой
+	// If 0 (FALSE) is returned, the WinAPI call failed
 	if ret == 0 {
-		return "UNKNOWN"
+		return UNKNOWN
 	}
 
-	// Дополнительная защита: если функция вернула TRUE, но тип продукта PRODUCT_UNDEFINED (0x00000000)
+	// Extra protection: if TRUE but PRODUCT_UNDEFINED (0x00000000)
 	if returnedType == 0 {
 		return "PRODUCT_UNDEFINED"
 	}
@@ -477,7 +473,7 @@ func (c *OSCollector) getEditionFromAPI(major, minor uint32) string {
 	return c.getEditionName(returnedType)
 }
 
-// getEditionName преобразует ID в читаемое название (полная версия)
+// getEditionName converts ID to a readable name (full version)
 func (c *OSCollector) getEditionName(productType uint32) string {
 	editions := map[uint32]string{
 		PRODUCT_BUSINESS:                            "Business",
@@ -625,29 +621,30 @@ func (c *OSCollector) getEditionName(productType uint32) string {
 	return fmt.Sprintf("Edition 0x%X", productType)
 }
 
-// getSystemLocale вычитывает код языка установки ОС напрямую через WinAPI
+// getSystemLocale reads the OS locale directly via WinAPI
 func (c *OSCollector) getSystemLocale() string {
-	// Максимальная длина имени локали в Windows (LOCALE_NAME_MAX_LENGTH = 85)
+	// Maximum locale name length in Windows (LOCALE_NAME_MAX_LENGTH = 85)
 	const localeNameMaxLength = 85
 	buf := make([]uint16, localeNameMaxLength)
 
+	// #nosec G103 -- safe use of unsafe.SliceData with local buffer
 	ret, _, _ := procGetSystemDefaultLocaleName.Call(
 		uintptr(unsafe.Pointer(unsafe.SliceData(buf))),
 		uintptr(localeNameMaxLength),
 	)
 
-	// Если функция вернула длину строки (> 0), преобразуем UTF-16 в Go-строку
+	// If function returned string length (> 0), convert UTF-16 to Go string
 	if ret > 0 {
 		return syscall.UTF16ToString(buf)
 	}
 
-	// Резервный вариант, если WinAPI сбойнул
-	return "UNKNOWN"
+	// Fallback if WinAPI failed
+	return UNKNOWN
 }
 
-// getInstallDate возвращает дату установки Windows как Unix timestamp
+// getInstallDate returns the Windows install date as Unix timestamp
 func (c *OSCollector) getInstallDate() int64 {
-	// Список ключей от самого надежного до текущего
+	// List of keys from most reliable to current
 	paths := []string{
 		`SOFTWARE\Microsoft\Windows NT\CurrentVersion\Source OS (Updated on)`,
 		`SOFTWARE\Microsoft\Windows NT\CurrentVersion\Source OS`,
@@ -663,7 +660,7 @@ func (c *OSCollector) getInstallDate() int64 {
 	return 0
 }
 
-// readInstallTimestamp читает timestamp из реестра
+// readInstallTimestamp reads a timestamp from the registry
 func (c *OSCollector) readInstallTimestamp(path string) uint64 {
 	regKey, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
 	if err != nil {
@@ -680,27 +677,27 @@ func (c *OSCollector) readInstallTimestamp(path string) uint64 {
 	return val
 }
 
-// getPowerShellVersion возвращает версию PowerShell (сначала ищет Core 7+, затем 3+, затем 1-2)
+// getPowerShellVersion returns the PowerShell version (first checks Core 7+, then 3+, then 1-2)
 func (c *OSCollector) getPowerShellVersion() string {
-	// 1. Проверяем современный PowerShell 6/7+ (Core)
+	// 1. Check modern PowerShell 6/7+ (Core)
 	if ver := c.readPSVersion(`SOFTWARE\Microsoft\PowerShellCore\InstalledVersions`, "SemanticVersion"); ver != "" {
 		return "Core " + ver
 	}
 
-	// 2. Проверяем встроенный Windows PowerShell 3.0 - 5.1
+	// 2. Check built-in Windows PowerShell 3.0 - 5.1
 	if ver := c.readPSVersion(`SOFTWARE\Microsoft\PowerShell\3\PowerShellEngine`, "PowerShellVersion"); ver != "" {
 		return ver
 	}
 
-	// 3. Проверяем старый встроенный Windows PowerShell 1.0 - 2.0
+	// 3. Check old built-in Windows PowerShell 1.0 - 2.0
 	if ver := c.readPSVersion(`SOFTWARE\Microsoft\PowerShell\1\PowerShellEngine`, "PowerShellVersion"); ver != "" {
 		return ver
 	}
 
-	return "UNKNOWN"
+	return UNKNOWN
 }
 
-// Вспомогательный неэкспортируемый метод для чистоты кода и защиты от дублирования defer
+// readPSVersion is a helper method to avoid defer duplication
 func (c *OSCollector) readPSVersion(path, valueName string) string {
 	regKey, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
 	if err != nil {
@@ -717,40 +714,41 @@ func (c *OSCollector) readPSVersion(path, valueName string) string {
 	return ver
 }
 
-// isSecureBootEnabled проверяет статус Secure Boot напрямую через UEFI
+// isSecureBootEnabled checks Secure Boot status directly via UEFI
 func (c *OSCollector) isSecureBootEnabled() bool {
-	// Имя переменной UEFI для SecureBoot
+	// UEFI variable name for SecureBoot
 	namePtr, err := syscall.UTF16PtrFromString("SecureBoot")
 	if err != nil {
 		return false
 	}
 
-	// GUID пространства имен UEFI для глобальных переменных
+	// UEFI namespace GUID for global variables
 	guidPtr, err := syscall.UTF16PtrFromString("{8be4df61-93ca-11d2-aa0d-00e098032b8c}")
 	if err != nil {
 		return false
 	}
 
-	// Буфер для ответа (SecureBoot возвращает 1 байт: 1 - включен, 0 - выключен)
+	// Buffer for response (SecureBoot returns 1 byte: 1 - enabled, 0 - disabled)
 	var buffer byte
 
+	// #nosec G103 -- safe use of unsafe.Pointer with local variables
 	ret, _, _ := procGetFirmwareEnvironmentVariable.Call(
 		uintptr(unsafe.Pointer(namePtr)),
 		uintptr(unsafe.Pointer(guidPtr)),
 		uintptr(unsafe.Pointer(&buffer)),
-		1, // Размер буфера в байтах
+		1, // Buffer size in bytes
 	)
 
-	// Если функция вернула больше 0, значит переменная успешно прочитана
+	// If function returned > 0, the variable was successfully read
 	if ret > 0 {
 		return buffer == 1
 	}
 
-	// Резервный вариант: если к UEFI нет прямого доступа, откатываемся на ваш проверенный код с реестром
+	// Fallback: use registry if UEFI is not directly accessible
 	return c.isSecureBootEnabledFromRegistry()
 }
 
-// Ваш текущий код как резервный метод
+// isSecureBootEnabledFromRegistry checks Secure Boot via registry
 func (c *OSCollector) isSecureBootEnabledFromRegistry() bool {
 	regKey, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\SecureBoot\State`, registry.QUERY_VALUE)
 	if err != nil {
@@ -767,11 +765,11 @@ func (c *OSCollector) isSecureBootEnabledFromRegistry() bool {
 	return val == 1
 }
 
-// getMachineGUID возвращает уникальный UUID ОС
+// getMachineGUID returns the unique OS UUID
 func (c *OSCollector) getMachineGUID() models.BinaryUUID {
 	regKey, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Cryptography`, registry.QUERY_VALUE)
 	if err != nil {
-		return models.BinaryUUID{} // Идиоматичный возврат нулевого значения
+		return models.BinaryUUID{}
 	}
 	defer func() {
 		_ = regKey.Close()
@@ -790,7 +788,7 @@ func (c *OSCollector) getMachineGUID() models.BinaryUUID {
 	return models.BinaryUUID(parsed)
 }
 
-// checkVirtualization определяет, запущена ли ОС на виртуальной машине
+// checkVirtualization determines if the OS is running on a virtual machine
 func (c *OSCollector) checkVirtualization() bool {
 	regKey, err := registry.OpenKey(registry.LOCAL_MACHINE, `HARDWARE\DESCRIPTION\System`, registry.QUERY_VALUE)
 	if err != nil {
@@ -800,24 +798,24 @@ func (c *OSCollector) checkVirtualization() bool {
 		_ = regKey.Close()
 	}()
 
-	// 1. Проверяем флаг гипервизора от процессора/ОС
+	// 1. Check hypervisor flag
 	if val, _, err := regKey.GetIntegerValue("HypervisorPresent"); err == nil && val == 1 {
 		return true
 	}
 
-	// 2. Исправлено: SystemBiosVersion — это REG_MULTI_SZ, читаем как срез строк
+	// 2. SystemBiosVersion is REG_MULTI_SZ, read as string slice
 	biosVersions, _, err := regKey.GetStringsValue("SystemBiosVersion")
 	if err != nil {
 		return false
 	}
 
-	// Оптимизация: индикаторы сразу в нижнем регистре, чтобы не тратить ресурсы в цикле
+	// Optimization: indicators in lowercase to avoid repeated conversion
 	vmIndicators := []string{
 		"vmware", "virtualbox", "qemu", "xen",
 		"hyper-v", "kvm", "parallels", "virtual machine",
 	}
 
-	// Проверяем каждую строку из биоса на наличие совпадений
+	// Check each BIOS string for matches
 	for _, biosVendor := range biosVersions {
 		lowerVendor := strings.ToLower(biosVendor)
 		for _, indicator := range vmIndicators {
@@ -830,17 +828,12 @@ func (c *OSCollector) checkVirtualization() bool {
 	return false
 }
 
-// checkHypervisorHost проверяет, работает ли система как хост-гипервизор (Hyper-V)
+// checkHypervisorHost checks if the system is running as a hypervisor host (Hyper-V)
 func (c *OSCollector) checkHypervisorHost() bool {
-	// Метод 1: Проверяем реестр (самый простой и надежный)
-	if c.checkHyperVRegistry() {
-		return true
-	}
-
-	return false
+	return c.checkHyperVRegistry()
 }
 
-// checkHyperVRegistry проверяет ключи реестра Hyper-V
+// checkHyperVRegistry checks Hyper-V registry keys
 func (c *OSCollector) checkHyperVRegistry() bool {
 	regKey, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
@@ -854,7 +847,7 @@ func (c *OSCollector) checkHyperVRegistry() bool {
 		_ = regKey.Close()
 	}()
 
-	// Проверяем целочисленные значения
+	// Check integer values
 	valueNames := []string{
 		"HyperVisorPresent",
 		"HypervisorPresent",
@@ -869,7 +862,7 @@ func (c *OSCollector) checkHyperVRegistry() bool {
 		}
 	}
 
-	// Дополнительно проверяем строковые значения
+	// Check string values
 	stringValueNames := []string{
 		"State",
 		"Status",
@@ -878,7 +871,6 @@ func (c *OSCollector) checkHyperVRegistry() bool {
 
 	for _, name := range stringValueNames {
 		if val, _, err := regKey.GetStringValue(name); err == nil {
-			// Линтер одобрит tagged switch
 			switch val {
 			case "Enabled", "Running", "Active", "1", "True":
 				return true
@@ -886,7 +878,7 @@ func (c *OSCollector) checkHyperVRegistry() bool {
 		}
 	}
 
-	// Проверяем наличие под-ключей
+	// Check sub-keys
 	subKeys := []string{
 		`SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\Workspaces`,
 		`SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\GuestCommunicationServices`,
@@ -901,14 +893,13 @@ func (c *OSCollector) checkHyperVRegistry() bool {
 	return false
 }
 
-// Вспомогательный метод для безопасной и изолированной проверки существования ключа
+// checkKeyExists safely checks if a registry key exists
 func (c *OSCollector) checkKeyExists(path string) bool {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
 	if err != nil {
 		return false
 	}
-	defer func() {
-		_ = k.Close()
-	}()
+	_ = k.Close()
+
 	return true
 }

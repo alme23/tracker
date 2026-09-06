@@ -1,4 +1,3 @@
-// internal/agent/agent.go
 package agent
 
 import (
@@ -13,21 +12,21 @@ import (
 	"github.com/alme23/tracker/internal/secproto"
 )
 
-// Config содержит настройки агента
+// Config contains agent settings
 type Config struct {
-	ServerAddr   string        // Адрес сервера (host:port)
-	SharedSecret string        // Секретный ключ
-	Timeout      time.Duration // Таймаут соединения
+	ServerAddr   string        // Server address (host:port)
+	SharedSecret string        // Shared secret key for encryption
+	Timeout      time.Duration // Connection timeout
 }
 
-// Agent отвечает за сбор и отправку данных
+// Agent is responsible for collecting and sending data
 type Agent struct {
 	config    Config
 	collector *collector.SystemCollector
 	encoder   *binproto.Encoder
 }
 
-// New создает нового агента
+// New creates a new agent
 func New(cfg Config) *Agent {
 	return &Agent{
 		config:    cfg,
@@ -36,39 +35,39 @@ func New(cfg Config) *Agent {
 	}
 }
 
-// RunOnce собирает данные и отправляет их один раз
+// RunOnce collects data and sends it once
 func (a *Agent) RunOnce(ctx context.Context) error {
-	// 1. Сбор данных
-	log.Println("Сбор данных...")
+	// 1. Collect data
+	log.Println("Collecting data...")
 	snapshot, err := a.collector.CollectAll()
 	if err != nil {
-		return fmt.Errorf("сбор данных: %w", err)
+		return fmt.Errorf("data collection: %w", err)
 	}
 
-	log.Printf("Данные собраны: hostname=%s, user=%s",
+	log.Printf("Data collected: hostname=%s, user=%s",
 		snapshot.Host.Hostname, snapshot.User.Username)
 
-	// 2. Отправка
+	// 2. Send data
 	if err := a.Send(ctx, snapshot); err != nil {
-		return fmt.Errorf("отправка данных: %w", err)
+		return fmt.Errorf("data sending: %w", err)
 	}
 
-	log.Printf("Данные отправлены на %s", a.config.ServerAddr)
+	log.Printf("Data sent to %s", a.config.ServerAddr)
 
 	return nil
 }
 
-// Send отправляет snapshot на сервер
+// Send sends a snapshot to the server
 func (a *Agent) Send(ctx context.Context, snapshot *models.SystemSnapshot) error {
-	// Бинарная сериализация
+	// Binary serialization
 	data, err := a.encoder.Encode(snapshot)
 	if err != nil {
-		return fmt.Errorf("сериализация: %w", err)
+		return fmt.Errorf("serialization: %w", err)
 	}
 
-	log.Printf("Размер пакета: %d байт", len(data))
+	log.Printf("Packet size: %d bytes", len(data))
 
-	// Отправка через secproto
+	// Send via secproto
 	if err := secproto.Send(ctx, a.config.ServerAddr, a.config.SharedSecret, data); err != nil {
 		return fmt.Errorf("secproto: %w", err)
 	}

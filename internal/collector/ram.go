@@ -1,5 +1,3 @@
-// tracker/internal/collector/ram.go
-
 //go:build windows
 
 package collector
@@ -7,18 +5,25 @@ package collector
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"unsafe"
 
 	"github.com/alme23/tracker/internal/models"
 )
 
-// Системные константы для работы с таблицами прошивки
+// System constants for firmware table access
 const (
-	providerRSMB = 0x52534D42 // "RSMB" в формате BigEndian/DWORD для SMBIOS
+	providerRSMB = 0x52534D42 // "RSMB" in BigEndian/DWORD format for SMBIOS
 )
 
-// memoryStatusEx — точная копия структуры MEMORYSTATUSEX из Win32 API
+// Static errors
+var (
+	ErrSMBIOSNotAvailable  = errors.New("SMBIOS tables unavailable")
+	ErrInvalidSMBIOSBuffer = errors.New("invalid SMBIOS buffer format")
+)
+
+// memoryStatusEx is an exact copy of the MEMORYSTATUSEX structure from Win32 API
 type memoryStatusEx struct {
 	dwLength                uint32
 	dwMemoryLoad            uint32
@@ -31,30 +36,32 @@ type memoryStatusEx struct {
 	ullAvailExtendedVirtual uint64
 }
 
-// Заголовок таблицы SMBIOS
+// smbiosTableStructure is the SMBIOS table header
 type smbiosTableStructure struct {
 	Type   uint8
 	Length uint8
 	Handle uint16
 }
 
+// RAMCollector collects information about memory
 type RAMCollector struct{}
 
+// NewRAMCollector creates a new RAMCollector
 func NewRAMCollector() *RAMCollector {
 	return &RAMCollector{}
 }
 
-// Collect собирает информацию о памяти и планках нативно без использования WMI
+// Collect gathers memory and stick information natively without WMI
 func (c *RAMCollector) Collect() (models.RAMInfo, error) {
 	var info models.RAMInfo
 
-	// 1. Статистика использования памяти (WinAPI)
+	// 1. Memory usage statistics (WinAPI)
 	var memStatus memoryStatusEx
 	memStatus.dwLength = uint32(unsafe.Sizeof(memStatus))
 
 	ret, _, err := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&memStatus)))
 	if ret == 0 {
-		return info, fmt.Errorf("ошибка вызова WinAPI GlobalMemoryStatusEx: %w", err)
+		return info, fmt.Errorf("WinAPI GlobalMemoryStatusEx error: %w", err)
 	}
 
 	info.TotalBytes = memStatus.ullTotalPhys
@@ -62,7 +69,7 @@ func (c *RAMCollector) Collect() (models.RAMInfo, error) {
 	info.TotalPageFile = memStatus.ullTotalPageFile
 	info.AvailablePageFile = memStatus.ullAvailPageFile
 
-	// 2. Сбор физических планок напрямую из SMBIOS таблицы Type 17
+	// 2. Collect physical sticks directly from SMBIOS Type 17
 	sticks, err := c.getPhysicalSticksFromSMBIOS()
 	if err == nil {
 		info.Sticks = sticks
@@ -71,9 +78,9 @@ func (c *RAMCollector) Collect() (models.RAMInfo, error) {
 	return info, nil
 }
 
-// getPhysicalSticksFromSMBIOS считывает прошивку и вытаскивает информацию о слотах памяти
+// getPhysicalSticksFromSMBIOS reads firmware and extracts memory slot information
 func (c *RAMCollector) getPhysicalSticksFromSMBIOS() ([]models.RAMStick, error) {
-	// Делаем первый вызов, чтобы узнать точный размер таблицы SMBIOS в байтах
+	// First call to get the exact SMBIOS table size in bytes
 	ret, _, _ := procGetSystemFirmwareTable.Call(
 		uintptr(providerRSMB),
 		0,
@@ -81,7 +88,7 @@ func (c *RAMCollector) getPhysicalSticksFromSMBIOS() ([]models.RAMStick, error) 
 		0,
 	)
 	if ret == 0 {
-		return nil, fmt.Errorf("SMBIOS таблицы недоступны")
+		return nil, ErrSMBIOSNotAvailable
 	}
 
 	buffer := make([]byte, ret)
@@ -92,12 +99,12 @@ func (c *RAMCollector) getPhysicalSticksFromSMBIOS() ([]models.RAMStick, error) 
 		uintptr(ret),
 	)
 	if ret == 0 {
-		return nil, fmt.Errorf("ошибка чтения таблицы GetSystemFirmwareTable: %w", err)
+		return nil, fmt.Errorf("GetSystemFirmwareTable read error: %w", err)
 	}
 
-	// Пропускаем 8 байт заголовка вывода RSMB Windows
+	// Skip 8 bytes of RSMB Windows output header
 	if len(buffer) < 8 {
-		return nil, fmt.Errorf("невалидный формат буфера SMBIOS")
+		return nil, ErrInvalidSMBIOSBuffer
 	}
 	smbiosData := buffer[8:]
 
@@ -105,7 +112,7 @@ func (c *RAMCollector) getPhysicalSticksFromSMBIOS() ([]models.RAMStick, error) 
 	offset := 0
 
 	for offset+4 <= len(smbiosData) {
-		// Читаем заголовок текущей структуры SMBIOS
+		// Read current SMBIOS structure header
 		header := smbiosTableStructure{
 			Type:   smbiosData[offset],
 			Length: smbiosData[offset+1],
@@ -116,10 +123,10 @@ func (c *RAMCollector) getPhysicalSticksFromSMBIOS() ([]models.RAMStick, error) 
 			break
 		}
 
-		// Выделяем данные структуры и блок текстовых строк, идущих сразу за ней
+		// Extract structure data and text string block
 		structBytes := smbiosData[offset : offset+int(header.Length)]
 
-		// Каждая структура завершается двойным нулем (0x00 0x00), ищем конец блока строк
+		// Each structure ends with double null (0x00 0x00), find the end of string block
 		stringOffset := offset + int(header.Length)
 		endStrings := stringOffset
 		for endStrings+1 < len(smbiosData) {
@@ -133,46 +140,45 @@ func (c *RAMCollector) getPhysicalSticksFromSMBIOS() ([]models.RAMStick, error) 
 		stringBytes := smbiosData[stringOffset:endStrings]
 		stringsList := c.parseSMBIOSStrings(stringBytes)
 
-		// Type 17 — это Memory Device (структура планки памяти)
+		// Type 17 is Memory Device (memory stick structure)
 		if header.Type == 17 && len(structBytes) >= 28 {
 			stick := c.parseType17Structure(structBytes, stringsList)
-			// Добавляем только реально установленные планки (размер > 0)
+			// Add only actually installed sticks (size > 0)
 			if stick.Capacity > 0 {
 				sticks = append(sticks, stick)
 			}
 		}
 
-		// Смещаемся к следующей структуре SMBIOS
+		// Move to the next SMBIOS structure
 		offset = endStrings
 	}
 
 	return sticks, nil
 }
 
-// parseType17Structure парсит сырые байты структуры Memory Device
+// parseType17Structure parses raw bytes of Memory Device structure
 func (c *RAMCollector) parseType17Structure(data []byte, textStrings []string) models.RAMStick {
 	var stick models.RAMStick
 
-	// Смещение 0x0C: Размер планки (2 байта)
+	// Offset 0x0C: Stick size (2 bytes)
 	rawSize := binary.LittleEndian.Uint16(data[12:14])
 	if rawSize == 0 || rawSize == 0xFFFF {
-		return stick // Слот пустой
+		return stick // Empty slot
 	}
 
-	// Если старший бит равен 1, размер указан в мегабайтах, иначе в килобайтах (зависит от ревизии SMBIOS)
-	// Но обычно значение меньше 0x7FFF — это чистые Мегабайты.
+	// If high bit is 1, size is in megabytes, otherwise in kilobytes
 	if (rawSize & 0x8000) == 0 {
 		stick.Capacity = uint64(rawSize) * 1024 * 1024
 	} else {
-		stick.Capacity = uint64(rawSize&0x7FFF) * 1024 // в КБ
+		stick.Capacity = uint64(rawSize&0x7FFF) * 1024
 	}
 
-	// Смещение 0x15: Скорость памяти в МГц (2 байта)
+	// Offset 0x15: Memory speed in MHz (2 bytes)
 	if len(data) >= 23 {
 		stick.SpeedMHz = uint32(binary.LittleEndian.Uint16(data[21:23]))
 	}
 
-	// Извлекаем текстовые индексы строк (индексация в SMBIOS начинается с 1)
+	// Extract text string indices (SMBIOS indexing starts at 1)
 	getString := func(indexByte byte) string {
 		idx := int(indexByte)
 		if idx > 0 && idx <= len(textStrings) {
@@ -181,32 +187,34 @@ func (c *RAMCollector) parseType17Structure(data []byte, textStrings []string) m
 		return "Unknown"
 	}
 
-	// Индексы строк внутри структуры Type 17
+	// String indices inside Type 17 structure
 	if len(data) >= 8 {
-		stick.Slot = getString(data[8]) // Device Locator (например, DIMM 0)
+		stick.Slot = getString(data[8])
 	}
 	if len(data) >= 24 {
-		stick.Manufacturer = getString(data[23]) // Производитель
+		stick.Manufacturer = getString(data[23])
 	}
 	if len(data) >= 25 {
-		stick.SerialNumber = getString(data[24]) // Серийный номер
+		stick.SerialNumber = getString(data[24])
 	}
 	if len(data) >= 27 {
-		stick.PartNumber = getString(data[26]) // Номер партии (Part Number)
+		stick.PartNumber = getString(data[26])
 	}
 
 	return stick
 }
 
-// parseSMBIOSStrings разбивает блок строк, разделенных байтом 0x00, в срез строк Go
+// parseSMBIOSStrings splits a block of null-separated strings into a Go string slice
 func (c *RAMCollector) parseSMBIOSStrings(data []byte) []string {
 	var res []string
-	parts := bytes.Split(data, []byte{0})
-	for _, p := range parts {
-		s := string(bytes.TrimSpace(p))
+
+	// Use SplitSeq for more efficient iteration
+	for part := range bytes.SplitSeq(data, []byte{0}) {
+		s := string(bytes.TrimSpace(part))
 		if s != "" {
 			res = append(res, s)
 		}
 	}
+
 	return res
 }

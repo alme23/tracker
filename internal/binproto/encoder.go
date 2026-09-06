@@ -1,44 +1,49 @@
-// tracker/internal/binproto/encoder.go
-
-// Package binproto provides a lightweight, high-performance binary serialization
-// protocol for SystemSnapshot, optimized for network transmission.
 package binproto
 
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"math"
 
 	"github.com/alme23/tracker/internal/models"
 )
 
-// MagicHeader идентифицирует формат данных при передаче
+// MagicHeader identifies the data format during transmission
 const MagicHeader = "TRCK1"
 
-// Encoder кодирует SystemSnapshot в компактный бинарный формат
+// Static errors
+var (
+	ErrStringTooLong  = errors.New("string too long")
+	ErrWriteMagic     = errors.New("failed to write magic header")
+	ErrWriteTimestamp = errors.New("failed to write timestamp")
+)
+
+// Encoder encodes SystemSnapshot into a compact binary format
 type Encoder struct {
 	buf *bytes.Buffer
 }
 
-// NewEncoder создает новый бинарный кодер
+// NewEncoder creates a new binary encoder
 func NewEncoder() *Encoder {
 	return &Encoder{
-		buf: bytes.NewBuffer(make([]byte, 0, 4096)), // 4KB предварительно
+		buf: &bytes.Buffer{},
 	}
 }
 
-// Encode сериализует SystemSnapshot в бинарный формат
+// Encode serializes SystemSnapshot into binary format
 func (e *Encoder) Encode(s *models.SystemSnapshot) ([]byte, error) {
 	e.buf.Reset()
 
-	// Magic header для версионирования
+	// Magic header for versioning
 	if _, err := e.buf.WriteString(MagicHeader); err != nil {
-		return nil, fmt.Errorf("write magic header: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrWriteMagic, err)
 	}
 
 	// Timestamp (int64 Unix timestamp)
 	if err := binary.Write(e.buf, binary.LittleEndian, s.Timestamp); err != nil {
-		return nil, fmt.Errorf("write timestamp: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrWriteTimestamp, err)
 	}
 
 	// User
@@ -84,19 +89,22 @@ func (e *Encoder) Encode(s *models.SystemSnapshot) ([]byte, error) {
 	return e.buf.Bytes(), nil
 }
 
-// writeString записывает строку с 2-байтовой длиной
+// writeString writes a string with 2-byte length prefix
 func (e *Encoder) writeString(s string) error {
-	if len(s) > 65535 {
-		return fmt.Errorf("string too long: %d bytes", len(s))
+	if len(s) > math.MaxUint16 {
+		return fmt.Errorf("%w: %d bytes (max %d)", ErrStringTooLong, len(s), math.MaxUint16)
 	}
-	if err := binary.Write(e.buf, binary.LittleEndian, uint16(len(s))); err != nil {
+
+	// #nosec G115 -- len(s) is already checked to be <= math.MaxUint16
+	length := uint16(len(s))
+	if err := binary.Write(e.buf, binary.LittleEndian, length); err != nil {
 		return err
 	}
 	_, err := e.buf.WriteString(s)
 	return err
 }
 
-// writeFlags записывает булевы флаги одним байтом
+// writeFlags writes boolean flags as a single byte
 func (e *Encoder) writeFlags(flags ...bool) error {
 	var b byte
 	for i, f := range flags {
@@ -107,7 +115,7 @@ func (e *Encoder) writeFlags(flags ...bool) error {
 	return e.buf.WriteByte(b)
 }
 
-// encodeUser кодирует UserInfo
+// encodeUser encodes UserInfo
 func (e *Encoder) encodeUser(u *models.UserInfo) error {
 	strings := []string{
 		u.Username, u.FullName, u.Domain, u.DomainFull,
@@ -122,7 +130,7 @@ func (e *Encoder) encodeUser(u *models.UserInfo) error {
 	return e.writeFlags(u.IsAdmin, u.IsDomainUser, u.IsLocalUser)
 }
 
-// encodeOS кодирует OSInfo
+// encodeOS encodes OSInfo
 func (e *Encoder) encodeOS(o *models.OSInfo) error {
 	strings := []string{
 		o.Name, o.Edition, o.BuildNumber, o.KernelVersion,
@@ -135,9 +143,15 @@ func (e *Encoder) encodeOS(o *models.OSInfo) error {
 		}
 	}
 
+	// Safe conversion with bounds check
+	arch := o.Architecture
+	if arch < 0 || arch > math.MaxUint8 {
+		return fmt.Errorf("architecture value out of range: %d", arch)
+	}
 	if err := binary.Write(e.buf, binary.LittleEndian, uint8(o.Architecture)); err != nil {
 		return err
 	}
+
 	if err := binary.Write(e.buf, binary.LittleEndian, o.InstallDate); err != nil {
 		return err
 	}
@@ -146,7 +160,7 @@ func (e *Encoder) encodeOS(o *models.OSInfo) error {
 		return err
 	}
 
-	// MachineGUID как 16 байт
+	// MachineGUID as 16 bytes
 	guidBytes := [16]byte(o.MachineGUID)
 	if _, err := e.buf.Write(guidBytes[:]); err != nil {
 		return err
@@ -155,7 +169,7 @@ func (e *Encoder) encodeOS(o *models.OSInfo) error {
 	return nil
 }
 
-// encodeProcessor кодирует ProcessorInfo
+// encodeProcessor encodes ProcessorInfo
 func (e *Encoder) encodeProcessor(p *models.ProcessorInfo) error {
 	if err := e.writeString(p.Model); err != nil {
 		return err
@@ -190,7 +204,7 @@ func (e *Encoder) encodeProcessor(p *models.ProcessorInfo) error {
 	return binary.Write(e.buf, binary.LittleEndian, p.L3CacheBytes)
 }
 
-// encodeRAM кодирует RAMInfo
+// encodeRAM encodes RAMInfo
 func (e *Encoder) encodeRAM(r *models.RAMInfo) error {
 	if err := binary.Write(e.buf, binary.LittleEndian, r.TotalBytes); err != nil {
 		return err
@@ -206,6 +220,7 @@ func (e *Encoder) encodeRAM(r *models.RAMInfo) error {
 	}
 
 	// Sticks
+	// #nosec G115 -- len(r.Sticks) is always < math.MaxUint16
 	if err := binary.Write(e.buf, binary.LittleEndian, uint16(len(r.Sticks))); err != nil {
 		return err
 	}
@@ -217,7 +232,7 @@ func (e *Encoder) encodeRAM(r *models.RAMInfo) error {
 	return nil
 }
 
-// encodeStick кодирует RAMStick
+// encodeStick encodes RAMStick
 func (e *Encoder) encodeStick(s *models.RAMStick) error {
 	if err := e.writeString(s.Slot); err != nil {
 		return err
@@ -237,8 +252,9 @@ func (e *Encoder) encodeStick(s *models.RAMStick) error {
 	return e.writeString(s.PartNumber)
 }
 
-// encodeDrives кодирует DiskStatuses
+// encodeDrives encodes DiskStatuses
 func (e *Encoder) encodeDrives(drives models.DiskStatuses) error {
+	// #nosec G115 -- len(drives) is always < math.MaxUint16
 	if err := binary.Write(e.buf, binary.LittleEndian, uint16(len(drives))); err != nil {
 		return err
 	}
@@ -250,11 +266,12 @@ func (e *Encoder) encodeDrives(drives models.DiskStatuses) error {
 	return nil
 }
 
-// encodeDrive кодирует DriveInfo
+// encodeDrive encodes DriveInfo
 func (e *Encoder) encodeDrive(d *models.DriveInfo) error {
 	if err := e.writeString(d.Letter); err != nil {
 		return err
 	}
+	// #nosec G115 -- DriveType values are always within uint8 range (0-6)
 	if err := e.buf.WriteByte(byte(d.Type)); err != nil {
 		return err
 	}
@@ -279,8 +296,9 @@ func (e *Encoder) encodeDrive(d *models.DriveInfo) error {
 	return e.writeFlags(d.IsReady)
 }
 
-// encodeServices кодирует ServicesStatuses
+// encodeServices encodes ServicesStatuses
 func (e *Encoder) encodeServices(services models.ServicesStatuses) error {
+	// #nosec G115 -- len(services) is always < math.MaxUint16
 	if err := binary.Write(e.buf, binary.LittleEndian, uint16(len(services))); err != nil {
 		return err
 	}
@@ -292,7 +310,7 @@ func (e *Encoder) encodeServices(services models.ServicesStatuses) error {
 	return nil
 }
 
-// encodeService кодирует ServiceStatus
+// encodeService encodes ServiceStatus
 func (e *Encoder) encodeService(s *models.ServiceStatus) error {
 	if err := e.writeString(s.Name); err != nil {
 		return err
@@ -308,8 +326,9 @@ func (e *Encoder) encodeService(s *models.ServiceStatus) error {
 	return binary.Write(e.buf, binary.LittleEndian, s.Port)
 }
 
-// encodeNetwork кодирует NetworkStatuses
+// encodeNetwork encodes NetworkStatuses
 func (e *Encoder) encodeNetwork(network models.NetworkStatuses) error {
+	// #nosec G115 -- len(network) is always < math.MaxUint16
 	if err := binary.Write(e.buf, binary.LittleEndian, uint16(len(network))); err != nil {
 		return err
 	}
@@ -321,8 +340,9 @@ func (e *Encoder) encodeNetwork(network models.NetworkStatuses) error {
 	return nil
 }
 
-// encodeInterface кодирует InterfaceInfo
+// encodeInterface encodes InterfaceInfo
 func (e *Encoder) encodeInterface(i *models.InterfaceInfo) error {
+	// #nosec G115 -- i.Index is always < math.MaxInt32
 	if err := binary.Write(e.buf, binary.LittleEndian, int32(i.Index)); err != nil {
 		return err
 	}
@@ -335,17 +355,20 @@ func (e *Encoder) encodeInterface(i *models.InterfaceInfo) error {
 	if err := e.writeString(i.MAC); err != nil {
 		return err
 	}
+	// #nosec G115 -- InterfaceType values are always within uint8 range (0-6)
 	if err := e.buf.WriteByte(byte(i.Type)); err != nil {
 		return err
 	}
 	if err := e.writeFlags(i.Operational); err != nil {
 		return err
 	}
+	// #nosec G115 -- IPAssignment values are always within uint8 range (0-3)
 	if err := e.buf.WriteByte(byte(i.IPAssignment)); err != nil {
 		return err
 	}
 
 	// IP Addresses
+	// #nosec G115 -- IP address count is always small
 	if err := binary.Write(e.buf, binary.LittleEndian, uint8(len(i.IPAddresses))); err != nil {
 		return err
 	}
@@ -354,6 +377,7 @@ func (e *Encoder) encodeInterface(i *models.InterfaceInfo) error {
 		if ipBytes == nil {
 			ipBytes = ip.To16()
 		}
+		// #nosec G115 -- IP address length is 4 or 16 bytes
 		if err := e.buf.WriteByte(byte(len(ipBytes))); err != nil {
 			return err
 		}
@@ -364,7 +388,7 @@ func (e *Encoder) encodeInterface(i *models.InterfaceInfo) error {
 	return nil
 }
 
-// encodeHost кодирует HostInfo
+// encodeHost encodes HostInfo
 func (e *Encoder) encodeHost(h *models.HostInfo) error {
 	strings := []string{
 		h.Hostname, h.FQDN, h.PhysicalHostname, h.PhysicalFQDN,

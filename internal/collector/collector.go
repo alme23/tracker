@@ -1,5 +1,3 @@
-// tracker/internal/collector/collector.go
-//
 //go:build windows
 
 package collector
@@ -13,7 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// SystemCollector координирует запуск всех дочерних сборщиков
+// SystemCollector coordinates the execution of all child collectors
 type SystemCollector struct {
 	serviceColl   *ServiceCollector
 	networkColl   *NetworkCollector
@@ -25,7 +23,7 @@ type SystemCollector struct {
 	userColl      *UserCollector
 }
 
-// NewSystemCollector инициализирует все зависимости в одном месте
+// NewSystemCollector initializes all dependencies in one place
 func NewSystemCollector(dialTimeout time.Duration) *SystemCollector {
 	return &SystemCollector{
 		serviceColl:   NewServiceCollector(dialTimeout),
@@ -39,17 +37,17 @@ func NewSystemCollector(dialTimeout time.Duration) *SystemCollector {
 	}
 }
 
-// CollectAll запускает параллельный сбор со всех коллекторов и склеивает результаты в единый snapshot
+// CollectAll runs parallel collection from all collectors and merges results into a single snapshot
 func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 	snapshot := &models.SystemSnapshot{
-		Timestamp: time.Now().Unix(), // Теперь int64
+		Timestamp: time.Now().Unix(),
 	}
 
 	var g errgroup.Group
 	var mu sync.Mutex
 
-	// ПРИОРИТЕТ 1: Запускаем сетевые и портовые коллекторы первыми.
-	// Пока они ждут ответа от сокетов и сетевого стека, процессор успеет разобрать весь реестр.
+	// PRIORITY 1: Start network and port collectors first.
+	// While they wait for socket responses, the CPU can process the registry.
 	g.Go(func() error {
 		networkData, err := sc.networkColl.Collect()
 		if err != nil {
@@ -72,7 +70,7 @@ func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 		return nil
 	})
 
-	// ПРИОРИТЕТ 2: Мгновенные коллекторы (WinAPI/SMBIOS/Реестр)
+	// PRIORITY 2: Instant collectors (WinAPI/SMBIOS/Registry)
 	g.Go(func() error {
 		osData, err := sc.osColl.Collect()
 		if err != nil {
@@ -95,7 +93,7 @@ func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 		return nil
 	})
 
-	// 5. Коллектор оперативной памяти
+	// RAM collector
 	g.Go(func() error {
 		ramData, err := sc.ramColl.Collect()
 		if err != nil {
@@ -107,7 +105,7 @@ func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 		return nil
 	})
 
-	// 6. Коллектор дисков
+	// Disk collector
 	g.Go(func() error {
 		diskData, err := sc.diskColl.Collect()
 		if err != nil {
@@ -119,7 +117,7 @@ func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 		return nil
 	})
 
-	// 7. Коллектор хоста
+	// Host collector
 	g.Go(func() error {
 		hostData, err := sc.hostColl.Collect()
 		if err != nil {
@@ -131,7 +129,7 @@ func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 		return nil
 	})
 
-	// 8. Коллектор пользователя
+	// User collector
 	g.Go(func() error {
 		userData, err := sc.userColl.Collect()
 		if err != nil {
@@ -143,7 +141,7 @@ func (sc *SystemCollector) CollectAll() (*models.SystemSnapshot, error) {
 		return nil
 	})
 
-	// Ждем завершения всех горутин
+	// Wait for all goroutines to complete
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}

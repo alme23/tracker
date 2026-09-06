@@ -1,5 +1,3 @@
-// tracker/internal/secproto/secproto.go
-
 // Package secproto provides a lightweight, high-performance binary data transport protocol
 // built on top of raw TCP sockets using ephemeral X25519 Diffie-Hellman key exchange (KEX)
 // and AES-256-GCM authenticated encryption to guarantee Perfect Forward Secrecy (PFS).

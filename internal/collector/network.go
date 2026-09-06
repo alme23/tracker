@@ -1,5 +1,3 @@
-// tracker/internal/collector/network.go
-
 //go:build windows
 
 package collector
@@ -15,26 +13,28 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// NetworkCollector collects information about network adapters
 type NetworkCollector struct{}
 
+// NewNetworkCollector creates a new NetworkCollector
 func NewNetworkCollector() *NetworkCollector {
 	return &NetworkCollector{}
 }
 
+// Collect gathers information about all network adapters
 func (c *NetworkCollector) Collect() (models.NetworkStatuses, error) {
 	flags := uint32(windows.GAA_FLAG_INCLUDE_PREFIX)
 
-	// Сразу выделяем 16КБ — рекомендация Microsoft для большинства систем.
-	// Это исключает повторный вызов WinAPI в 99% случаев.
 	size := uint32(16384)
 	var buf []byte
 
-	const maxAttempts = 3 // Уменьшаем до 3, так как буфер уже большой
+	const maxAttempts = 3
 	var err error
 
 	for range maxAttempts {
 		buf = make([]byte, size)
 
+		// #nosec G103 -- safe use of unsafe.SliceData with local buffer
 		err = windows.GetAdaptersAddresses(
 			syscall.AF_UNSPEC,
 			flags,
@@ -46,28 +46,26 @@ func (c *NetworkCollector) Collect() (models.NetworkStatuses, error) {
 			break
 		}
 		if !errors.Is(err, windows.ERROR_BUFFER_OVERFLOW) {
-			return nil, fmt.Errorf("ошибка WinAPI GetAdaptersAddresses: %w", err)
+			return nil, fmt.Errorf("WinAPI GetAdaptersAddresses error: %w", err)
 		}
-		// Если все-таки overflow, Windows уже записала в size нужный размер
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("превышено количество попыток выделения буфера Network: %w", err)
+		return nil, fmt.Errorf("network buffer allocation attempts exceeded: %w", err)
 	}
 
-	// Оптимизация: Считаем количество адаптеров в списке ПЕРЕД выделением слайса,
-	// чтобы сделать точную аллокацию без динамического расширения кучи!
+	// Count adapters for precise allocation
 	adapterCount := 0
+	// #nosec G103 -- safe use of unsafe.SliceData with local buffer
 	curr := (*windows.IpAdapterAddresses)(unsafe.Pointer(unsafe.SliceData(buf)))
 	for curr != nil {
 		adapterCount++
 		curr = curr.Next
 	}
 
-	// Идеальное точное выделение памяти
 	result := make(models.NetworkStatuses, 0, adapterCount)
 
-	// Используем безопасный указатель на данные слайса
+	// #nosec G103 -- safe use of unsafe.SliceData with local buffer
 	adapter := (*windows.IpAdapterAddresses)(unsafe.Pointer(unsafe.SliceData(buf)))
 	for adapter != nil {
 		info := models.InterfaceInfo{
@@ -77,7 +75,7 @@ func (c *NetworkCollector) Collect() (models.NetworkStatuses, error) {
 			Operational: adapter.OperStatus == windows.IfOperStatusUp,
 		}
 
-		// Тип интерфейса
+		// Interface type
 		switch adapter.IfType {
 		case windows.IF_TYPE_ETHERNET_CSMACD:
 			info.Type = models.TypeEthernet
@@ -93,21 +91,22 @@ func (c *NetworkCollector) Collect() (models.NetworkStatuses, error) {
 			info.Type = models.TypeUnknown
 		}
 
-		// MAC-адрес
+		// MAC address
 		if adapter.PhysicalAddressLength > 0 && adapter.PhysicalAddressLength <= uint32(len(adapter.PhysicalAddress)) {
 			info.MAC = net.HardwareAddr(adapter.PhysicalAddress[:adapter.PhysicalAddressLength]).String()
 		}
 
-		// IP Assignment
-		if info.Type == models.TypeLoopback {
+		// IP assignment
+		switch {
+		case info.Type == models.TypeLoopback:
 			info.IPAssignment = models.AssignmentNotApps
-		} else if (adapter.Flags & 0x0004) != 0 {
+		case (adapter.Flags & 0x0004) != 0:
 			info.IPAssignment = models.AssignmentDHCP
-		} else {
+		default:
 			info.IPAssignment = models.AssignmentStatic
 		}
 
-		// IP-адреса
+		// IP addresses
 		if adapter.FirstUnicastAddress != nil {
 			info.IPAddresses = make([]net.IP, 0, 2)
 			unicastAddr := adapter.FirstUnicastAddress

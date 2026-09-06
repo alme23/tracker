@@ -1,5 +1,3 @@
-// tracker/internal/collector/processor.go
-
 //go:build windows
 
 package collector
@@ -11,11 +9,10 @@ import (
 	"unsafe"
 
 	"github.com/alme23/tracker/internal/models"
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
-// Константы типов связей
+// Relationship type constants
 const (
 	relationProcessorCore    = 0
 	relationNumaNode         = 1
@@ -25,13 +22,15 @@ const (
 	relationAll              = 0xFFFF
 )
 
+// ProcessorCollector collects information about the processor
 type ProcessorCollector struct{}
 
+// NewProcessorCollector creates a new ProcessorCollector
 func NewProcessorCollector() *ProcessorCollector {
 	return &ProcessorCollector{}
 }
 
-// Collect собирает информацию о процессоре
+// Collect gathers information about the processor
 func (c *ProcessorCollector) Collect() (models.ProcessorInfo, error) {
 	var info models.ProcessorInfo
 
@@ -45,7 +44,7 @@ func (c *ProcessorCollector) Collect() (models.ProcessorInfo, error) {
 	return info, nil
 }
 
-// collectFromRegistry получает информацию из реестра
+// collectFromRegistry gets information from the registry
 func (c *ProcessorCollector) collectFromRegistry(info *models.ProcessorInfo) error {
 	k, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
@@ -53,7 +52,7 @@ func (c *ProcessorCollector) collectFromRegistry(info *models.ProcessorInfo) err
 		registry.QUERY_VALUE,
 	)
 	if err != nil {
-		return fmt.Errorf("ошибка открытия ветки реестра CPU: %w", err)
+		return fmt.Errorf("CPU registry key open error: %w", err)
 	}
 	defer func() {
 		_ = k.Close()
@@ -85,43 +84,39 @@ func (c *ProcessorCollector) collectFromRegistry(info *models.ProcessorInfo) err
 	return nil
 }
 
-// enrichProcessorTopology получает информацию о топологии
+// enrichProcessorTopology gets topology information
 func (c *ProcessorCollector) enrichProcessorTopology(info *models.ProcessorInfo) {
-	// Железно получаем точное количество логических процессоров (потоков) из ОС
-	// windows.GetActiveProcessorCount(windows.ALL_PROCESSOR_GROUPS) возвращает реальные потоки (4 для вашего i5)
-	info.LogicalProcessors = uint32(windows.GetActiveProcessorCount(windows.ALL_PROCESSOR_GROUPS))
-	if info.LogicalProcessors == 0 {
-		info.LogicalProcessors = uint32(runtime.NumCPU())
-	}
+	fallbackThreads := uint32(runtime.NumCPU())
 
 	var returnedLength uint32
-	// Для гарантированного получения кэша запрашиваем строго relationCache (2) вместо relationAll
-	_, _, _ = procGetLogicalProcessorInformationEx.Call(
-		uintptr(relationCache),
+	ret, _, _ := procGetLogicalProcessorInformationEx.Call(
+		uintptr(relationAll),
 		0,
 		uintptr(unsafe.Pointer(&returnedLength)),
 	)
 
-	if returnedLength == 0 {
-		c.setFallbackInfo(info, info.LogicalProcessors)
+	if ret == 0 || returnedLength == 0 {
+		c.setFallbackInfo(info, fallbackThreads)
 		return
 	}
 
 	buffer := make([]byte, returnedLength)
-	ret, _, _ := procGetLogicalProcessorInformationEx.Call(
-		uintptr(relationCache),
+
+	ret, _, _ = procGetLogicalProcessorInformationEx.Call(
+		uintptr(relationAll),
 		uintptr(unsafe.Pointer(unsafe.SliceData(buffer))),
 		uintptr(unsafe.Pointer(&returnedLength)),
 	)
 
-	if ret != 0 {
-		c.parseProcessorData(buffer[:returnedLength], info, info.LogicalProcessors)
-	} else {
-		c.setFallbackInfo(info, info.LogicalProcessors)
+	if ret == 0 {
+		c.setFallbackInfo(info, fallbackThreads)
+		return
 	}
+
+	c.parseProcessorData(buffer[:returnedLength], info, fallbackThreads)
 }
 
-// setFallbackInfo устанавливает базовую информацию
+// setFallbackInfo sets basic information on failure
 func (c *ProcessorCollector) setFallbackInfo(info *models.ProcessorInfo, logicalProcessors uint32) {
 	info.LogicalProcessors = logicalProcessors
 	info.PhysicalCores = logicalProcessors / 2
@@ -131,10 +126,9 @@ func (c *ProcessorCollector) setFallbackInfo(info *models.ProcessorInfo, logical
 	info.SMTEnabled = logicalProcessors > info.PhysicalCores
 }
 
-// parseProcessorData парсит данные (теперь сфокусирован на кэше)
+// parseProcessorData parses processor topology data
 func (c *ProcessorCollector) parseProcessorData(buffer []byte, info *models.ProcessorInfo, fallbackThreads uint32) {
-	var offset uint32
-	var numaNodesCount uint32
+	var offset, numaNodesCount uint32
 
 	for offset+8 <= uint32(len(buffer)) {
 		relationship := binary.LittleEndian.Uint32(buffer[offset : offset+4])
@@ -146,36 +140,47 @@ func (c *ProcessorCollector) parseProcessorData(buffer []byte, info *models.Proc
 
 		structBytes := buffer[offset : offset+structSize]
 
-		// Парсим только кэш, так как ядра мы посчитаем надежнее через формулу ниже
-		if relationship == relationCache {
-			c.parseCache(structBytes, info)
-		} else if relationship == relationNumaNode {
+		switch relationship {
+		case relationProcessorCore:
+			c.parseProcessorCore(structBytes, info)
+
+		case relationNumaNode:
 			numaNodesCount++
+
+		case relationCache:
+			c.parseCache(structBytes, info)
 		}
 
 		offset += structSize
 	}
 
 	info.NUMAEnabled = numaNodesCount > 1
+
+	if info.LogicalProcessors == 0 {
+		info.LogicalProcessors = fallbackThreads
+	}
+
+	if info.PhysicalCores == 0 {
+		info.PhysicalCores = fallbackThreads / 2
+		if info.PhysicalCores == 0 {
+			info.PhysicalCores = 1
+		}
+	}
 }
 
-// parseProcessorCore парсит ядро на 64-битной Windows
+// parseProcessorCore parses a processor core structure
 func (c *ProcessorCollector) parseProcessorCore(structBytes []byte, info *models.ProcessorInfo) {
-	// Для relationProcessorCore размер структуры на x64 составляет минимум 32 байта
 	if len(structBytes) < 32 {
 		return
 	}
 
 	info.PhysicalCores++
 
-	// Флаг LTP_EMPTY (индекс 8)
 	coreFlags := structBytes[8]
 	if coreFlags == 1 {
 		info.SMTEnabled = true
 	}
 
-	// На x64 Windows маска процессора (GroupMask.Mask) находится строго на смещении 24
-	// и занимает 8 байт (uint64)
 	mask := binary.LittleEndian.Uint64(structBytes[24:32])
 
 	var threadCount uint32
@@ -187,14 +192,10 @@ func (c *ProcessorCollector) parseProcessorCore(structBytes []byte, info *models
 		tempMask >>= 1
 	}
 
-	// Если маска по какой-то причине пустая (баг виртуализации/эмуляции),
-	// берем базовый fallback в 1 поток
 	if threadCount == 0 {
 		threadCount = 1
 	}
 
-	// Дополнительная проверка на SMT:
-	// Если маска одного физического ядра содержит больше 1 бита (потока), значит SMT гарантированно активен
 	if threadCount > 1 {
 		info.SMTEnabled = true
 	}
@@ -202,7 +203,7 @@ func (c *ProcessorCollector) parseProcessorCore(structBytes []byte, info *models
 	info.LogicalProcessors += threadCount
 }
 
-// parseCache парсит кэш
+// parseCache parses cache information
 func (c *ProcessorCollector) parseCache(structBytes []byte, info *models.ProcessorInfo) {
 	if len(structBytes) < 16 {
 		return
@@ -221,29 +222,26 @@ func (c *ProcessorCollector) parseCache(structBytes []byte, info *models.Process
 	}
 }
 
-// validateInfo проверяет данные и вычисляет ядра на основе потоков
+// validateInfo validates and normalizes the collected data
 func (c *ProcessorCollector) validateInfo(info *models.ProcessorInfo) {
-	// Поскольку логические процессоры теперь гарантированно равны 4:
-	// Если у нас стандартный потребительский CPU (Intel Core), то при наличии SMT
-	// количество физических ядер строго в 2 раза меньше потоков.
-
-	// Вытаскиваем точное число ядер из реестра в качестве первоисточника
-	if info.PhysicalCores == 0 {
-		// Попробуем посчитать стандартным путем для систем с Hyper-Threading
-		info.PhysicalCores = info.LogicalProcessors / 2
-		if info.PhysicalCores == 0 {
-			info.PhysicalCores = 1
-		}
+	if info.PhysicalCores > info.LogicalProcessors {
+		info.PhysicalCores = info.LogicalProcessors
 	}
 
-	// Корректируем флаг SMT на основе реальных пропорций
-	if info.LogicalProcessors > info.PhysicalCores {
-		info.SMTEnabled = true
-	} else {
+	if info.SMTEnabled && info.LogicalProcessors == info.PhysicalCores {
 		info.SMTEnabled = false
 	}
 
-	// Если кэш не определен, оставляем ваши проверенные значения
+	if !info.SMTEnabled && info.LogicalProcessors > info.PhysicalCores {
+		info.SMTEnabled = true
+	}
+
+	// Use registry as fallback for cache info
+	if info.L1CacheBytes == 0 || info.L2CacheBytes == 0 || info.L3CacheBytes == 0 {
+		c.getCacheFromRegistry(info)
+	}
+
+	// Last resort fallback
 	if info.L1CacheBytes == 0 {
 		info.L1CacheBytes = uint64(info.PhysicalCores) * 64 * 1024
 	}
@@ -251,11 +249,11 @@ func (c *ProcessorCollector) validateInfo(info *models.ProcessorInfo) {
 		info.L2CacheBytes = uint64(info.PhysicalCores) * 256 * 1024
 	}
 	if info.L3CacheBytes == 0 {
-		info.L3CacheBytes = 4 * 1024 * 1024 // 4MB SmartCache для i5-7260U
+		info.L3CacheBytes = 10 * 1024 * 1024
 	}
 }
 
-// getCacheFromRegistry получает информацию о кэше из реестра
+// getCacheFromRegistry gets cache information from the registry
 func (c *ProcessorCollector) getCacheFromRegistry(info *models.ProcessorInfo) {
 	k, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,

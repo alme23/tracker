@@ -1,67 +1,75 @@
-// tracker/internal/models/host.go
 package models
 
 import (
 	"fmt"
+	"math"
 	"time"
 )
 
-// HostInfo содержит информацию о хосте (компьютере)
+// HostInfo contains information about the host (computer)
 type HostInfo struct {
-	Hostname         string `json:"hostname"`          // DNS имя компьютера
-	FQDN             string `json:"fqdn"`              // Полное DNS имя
-	PhysicalHostname string `json:"physical_hostname"` // Физическое имя (для VM)
-	PhysicalFQDN     string `json:"physical_fqdn"`     // Полное физическое имя (для VM)
-	Domain           string `json:"domain"`            // Домен
-	Workgroup        string `json:"workgroup"`         // Рабочая группа (если не в домене)
-	UpTimeSeconds    uint64 `json:"uptime_seconds"`    // Время работы в секундах
-	BootTime         uint64 `json:"boot_time"`         // Время последней загрузки
-	TimeZone         string `json:"timezone"`          // Часовой пояс
-	TimeZoneOffset   int16  `json:"timezone_offset"`   // Смещение в минутах от UTC
+	Hostname         string `json:"hostname"`          // DNS hostname of the computer
+	FQDN             string `json:"fqdn"`              // Fully qualified domain name
+	PhysicalHostname string `json:"physical_hostname"` // Physical machine name (for VMs)
+	PhysicalFQDN     string `json:"physical_fqdn"`     // Physical fully qualified domain name (for VMs)
+	Domain           string `json:"domain"`            // Domain name
+	Workgroup        string `json:"workgroup"`         // Workgroup name (if not in a domain)
+	UpTimeSeconds    uint64 `json:"uptime_seconds"`    // System uptime in seconds
+	BootTime         uint64 `json:"boot_time"`         // Last boot time as Unix timestamp
+	TimeZone         string `json:"timezone"`          // Time zone name
+	TimeZoneOffset   int16  `json:"timezone_offset"`   // Time zone offset in minutes from UTC
 
-	// Информация о производителе и модели
-	Manufacturer string `json:"manufacturer"`  // Производитель системы
-	Model        string `json:"model"`         // Модель системы
-	SKU          string `json:"sku"`           // SKU (Stock Keeping Unit)
-	Family       string `json:"family"`        // Семейство системы
-	Version      string `json:"version"`       // Версия системы
-	SerialNumber string `json:"serial_number"` // Серийный номер
+	Manufacturer string `json:"manufacturer"`  // System manufacturer (e.g., "Dell Inc.")
+	Model        string `json:"model"`         // System model (e.g., "Precision T3610")
+	SKU          string `json:"sku"`           // Stock keeping unit
+	Family       string `json:"family"`        // System family
+	Version      string `json:"version"`       // System version
+	SerialNumber string `json:"serial_number"` // System serial number
 
-	// Информация о BIOS
-	BIOSVendor       string `json:"bios_vendor"`        // Производитель BIOS
-	BIOSVersion      string `json:"bios_version"`       // Версия BIOS
-	BIOSDate         string `json:"bios_date"`          // Дата BIOS
-	BIOSMajorRelease uint32 `json:"bios_major_release"` // Мажорная версия BIOS
-	BIOSMinorRelease uint32 `json:"bios_minor_release"` // Минорная версия BIOS
+	BIOSVendor       string `json:"bios_vendor"`        // BIOS vendor
+	BIOSVersion      string `json:"bios_version"`       // BIOS version
+	BIOSDate         string `json:"bios_date"`          // BIOS release date
+	BIOSMajorRelease uint32 `json:"bios_major_release"` // BIOS major release number
+	BIOSMinorRelease uint32 `json:"bios_minor_release"` // BIOS minor release number
 
-	// Информация о материнской плате
-	BaseBoardManufacturer string `json:"baseboard_manufacturer"` // Производитель платы
-	BaseBoardProduct      string `json:"baseboard_product"`      // Модель платы
-	BaseBoardVersion      string `json:"baseboard_version"`      // Версия платы
+	BaseBoardManufacturer string `json:"baseboard_manufacturer"` // Motherboard manufacturer
+	BaseBoardProduct      string `json:"baseboard_product"`      // Motherboard model
+	BaseBoardVersion      string `json:"baseboard_version"`      // Motherboard version
 }
 
-// GetBootTime возвращает время загрузки как time.Time
+// GetBootTime returns the boot time as time.Time
 func (h *HostInfo) GetBootTime() time.Time {
 	if h.BootTime == 0 {
 		return time.Time{}
 	}
+
+	// #nosec G115 -- BootTime is always a valid Unix timestamp from Windows
 	return time.Unix(int64(h.BootTime), 0)
 }
 
-// GetBootTimeString возвращает время загрузки в формате "YYYY-MM-DD HH:MM:SS"
+// GetBootTimeString returns the boot time in "YYYY-MM-DD HH:MM:SS" format
 func (h *HostInfo) GetBootTimeString() string {
 	if h.BootTime == 0 {
-		return "UNKNOWN"
+		return UNKNOWN
 	}
+
+	// #nosec G115 -- BootTime is always a valid Unix timestamp from Windows
 	return time.Unix(int64(h.BootTime), 0).Format("2006-01-02 15:04:05")
 }
 
-// GetUpTime возвращает время работы как time.Duration
+// GetUpTime returns the uptime as time.Duration
 func (h *HostInfo) GetUpTime() time.Duration {
+	const maxSeconds = uint64(math.MaxInt64 / int64(time.Second))
+
+	if h.UpTimeSeconds > maxSeconds {
+		// Uptime exceeds maximum duration, cap it
+		return time.Duration(math.MaxInt64)
+	}
+
 	return time.Duration(h.UpTimeSeconds) * time.Second
 }
 
-// GetUpTimeString возвращает время работы в читаемом виде
+// GetUpTimeString returns the uptime in human-readable format
 func (h *HostInfo) GetUpTimeString() string {
 	duration := h.GetUpTime()
 

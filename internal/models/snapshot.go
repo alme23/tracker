@@ -1,14 +1,14 @@
 package models
 
-// SystemSnapshot представляет собой полный слепок состояния системы на текущий момент
+// SystemSnapshot represents a complete snapshot of the system state at a given moment
 type SystemSnapshot struct {
-	Timestamp int64            `json:"timestamp"`
-	User      UserInfo         `json:"user"`
-	OS        OSInfo           `json:"os"`
-	Processor ProcessorInfo    `json:"processor"`
-	RAM       RAMInfo          `json:"ram"`
-	Drives    DiskStatuses     `json:"drives"`
-	Services  ServicesStatuses `json:"services"`
-	Network   NetworkStatuses  `json:"network"`
-	Host      HostInfo         `json:"host"`
+	Timestamp int64            `json:"timestamp"` // Unix timestamp when the snapshot was taken
+	User      UserInfo         `json:"user"`      // Information about the current user
+	OS        OSInfo           `json:"os"`        // Operating system information
+	Processor ProcessorInfo    `json:"processor"` // Processor characteristics
+	RAM       RAMInfo          `json:"ram"`       // Memory information
+	Drives    DiskStatuses     `json:"drives"`    // List of drives
+	Services  ServicesStatuses `json:"services"`  // Service status (RDP, VNC)
+	Network   NetworkStatuses  `json:"network"`   // Network interfaces
+	Host      HostInfo         `json:"host"`      // Host (computer) information
 }

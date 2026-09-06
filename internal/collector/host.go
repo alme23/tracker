@@ -1,5 +1,3 @@
-// tracker/internal/collector/host.go
-
 //go:build windows
 
 package collector
@@ -14,16 +12,16 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
-// Константы для GetComputerNameEx
+// Constants for GetComputerNameEx
 const (
 	computerNameNetBIOS                   = 0
-	computerNameDnsHostname               = 1
-	computerNameDnsDomain                 = 2
-	computerNameDnsFullyQualified         = 3
+	computerNameDNSHostname               = 1
+	computerNameDNSDomain                 = 2
+	computerNameDNSFullyQualified         = 3
 	computerNamePhysicalNetBIOS           = 4
-	computerNamePhysicalDnsHostname       = 5
-	computerNamePhysicalDnsDomain         = 6
-	computerNamePhysicalDnsFullyQualified = 7
+	computerNamePhysicalDNSHostname       = 5
+	computerNamePhysicalDNSDomain         = 6
+	computerNamePhysicalDNSFullyQualified = 7
 )
 
 type timeZoneInformation struct {
@@ -36,66 +34,74 @@ type timeZoneInformation struct {
 	DaylightBias int32
 }
 
+// HostCollector collects information about the host computer
 type HostCollector struct{}
 
+// NewHostCollector creates a new HostCollector
 func NewHostCollector() *HostCollector {
 	return &HostCollector{}
 }
 
-// Collect собирает информацию о хосте
+// Collect gathers information about the host
 func (c *HostCollector) Collect() (models.HostInfo, error) {
 	info := models.HostInfo{}
 
-	// 1. DNS имя компьютера
-	info.Hostname = c.getComputerName(computerNameDnsHostname)
+	// 1. DNS hostname
+	info.Hostname = c.getComputerName(computerNameDNSHostname)
 	if info.Hostname == "" {
 		info.Hostname, _ = os.Hostname()
 	}
 
-	// 2. Полное DNS имя (FQDN)
-	info.FQDN = c.getComputerName(computerNameDnsFullyQualified)
+	// 2. Fully qualified domain name (FQDN)
+	info.FQDN = c.getComputerName(computerNameDNSFullyQualified)
 
-	// 3. Физическое имя
-	info.PhysicalHostname = c.getComputerName(computerNamePhysicalDnsHostname)
+	// 3. Physical hostname
+	info.PhysicalHostname = c.getComputerName(computerNamePhysicalDNSHostname)
 
-	// 4. Полное физическое имя
-	info.PhysicalFQDN = c.getComputerName(computerNamePhysicalDnsFullyQualified)
+	// 4. Physical FQDN
+	info.PhysicalFQDN = c.getComputerName(computerNamePhysicalDNSFullyQualified)
 
-	// 5. Домен
-	info.Domain = c.getComputerName(computerNameDnsDomain)
+	// 5. Domain
+	info.Domain = c.getComputerName(computerNameDNSDomain)
 
-	// 6. Рабочая группа (если не в домене)
+	// 6. Workgroup (if not in a domain)
 	if info.Domain == "" {
 		info.Workgroup = c.getWorkgroup()
 	}
 
-	// 7. Аптайм
+	// 7. Uptime and boot time
 	info.UpTimeSeconds = c.getUpTimeSeconds()
 
-	currentTime := uint64(time.Now().Unix())
-	if info.UpTimeSeconds < currentTime {
-		info.BootTime = currentTime - info.UpTimeSeconds
-	} else {
-		// Если аптайм больше текущего времени (маловероятно), ставим 0
+	now := time.Now().Unix()
+	if now < 0 {
+		// System clock is before 1970 (unlikely), set boot time to 0
 		info.BootTime = 0
+	} else {
+		currentTime := uint64(now)
+		if info.UpTimeSeconds < currentTime {
+			info.BootTime = currentTime - info.UpTimeSeconds
+		} else {
+			// If uptime exceeds current time (unlikely), set to 0
+			info.BootTime = 0
+		}
 	}
 
-	// 8. Часовой пояс
+	// 8. Time zone
 	info.TimeZone, info.TimeZoneOffset = c.getTimeZone()
 
-	// 9. Информация о железе (включая BIOS и материнскую плату)
+	// 9. Hardware info (including BIOS and motherboard)
 	c.collectHardwareInfo(&info)
 
 	return info, nil
 }
 
-// getComputerName получает имя компьютера
+// getComputerName returns the computer name of the specified type
 func (c *HostCollector) getComputerName(nameType uint32) string {
-	// Исправлено: переменная size должна объявляться строго ВНУТРИ метода,
-	// так как WinAPI перезаписывает её значение (делает её меньше).
+	// Size variable must be declared inside the method because WinAPI overwrites it
 	var size uint32 = 256
 	buffer := make([]uint16, size)
 
+	// #nosec G103 -- safe use of unsafe.SliceData with local buffer
 	ret, _, _ := procGetComputerNameEx.Call(
 		uintptr(nameType),
 		uintptr(unsafe.Pointer(unsafe.SliceData(buffer))),
@@ -106,13 +112,13 @@ func (c *HostCollector) getComputerName(nameType uint32) string {
 		return ""
 	}
 
-	// Читаем строго до размера size, который вернула Windows
+	// Read only up to the size returned by Windows
 	return syscall.UTF16ToString(buffer[:size])
 }
 
-// getWorkgroup получает рабочую группу (замените этот метод в host.go)
+// getWorkgroup returns the workgroup name
 func (c *HostCollector) getWorkgroup() string {
-	// 1. Пробуем прочитать из параметров LanmanWorkstation
+	// 1. Try to read from LanmanWorkstation parameters
 	netKey, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
 		`SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters`,
@@ -127,7 +133,7 @@ func (c *HostCollector) getWorkgroup() string {
 		}
 	}
 
-	// 2. Если там пусто, пробуем прочитать из параметров Tcpip (резервный вариант)
+	// 2. Fallback: try Tcpip parameters
 	tcpKey, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
 		`SYSTEM\CurrentControlSet\Services\Tcpip\Parameters`,
@@ -137,44 +143,46 @@ func (c *HostCollector) getWorkgroup() string {
 		defer func() {
 			_ = tcpKey.Close()
 		}()
-		// Проверяем именно параметр Workgroup, который создается для незадоменных ПК
 		if wg, _, err := tcpKey.GetStringValue("Workgroup"); err == nil && wg != "" {
 			return wg
 		}
 	}
 
-	// 3. Гарантированный дефолтный фолбек для Windows локальных машин
+	// 3. Default fallback for Windows local machines
 	return "WORKGROUP"
 }
 
-// getUpTimeSeconds получает время работы в секундах
+// getUpTimeSeconds returns the system uptime in seconds
 func (c *HostCollector) getUpTimeSeconds() uint64 {
 	ret, _, _ := procGetTickCount64.Call()
 	if ret == 0 {
 		return 0
 	}
 
-	// GetTickCount64 возвращает миллисекунды
+	// GetTickCount64 returns milliseconds
 	return uint64(ret) / 1000
 }
 
-// getTimeZone получает информацию о часовом поясе
+// getTimeZone returns the time zone name and offset in minutes
 func (c *HostCollector) getTimeZone() (name string, offsetMinutes int16) {
 	var tzInfo timeZoneInformation
 
+	// #nosec G103 -- safe use of unsafe.Pointer with local struct
 	ret, _, _ := procGetTimeZoneInformation.Call(
 		uintptr(unsafe.Pointer(&tzInfo)),
 	)
 
 	// TIME_ZONE_ID_INVALID
-	if ret == 0xFFFFFFFF || int32(ret) == -1 {
+	const timeZoneIDInvalid = 0xFFFFFFFF
+
+	// #nosec G115 -- WinAPI returns DWORD (uint32), safe to convert
+	if uint32(ret) == timeZoneIDInvalid {
 		return "UTC", 0
 	}
 
 	currentBias := tzInfo.Bias
 	var zoneName string
 
-	// Идиоматичный tagged switch
 	switch ret {
 	case 2: // TIME_ZONE_ID_DAYLIGHT
 		currentBias += tzInfo.DaylightBias
@@ -184,15 +192,16 @@ func (c *HostCollector) getTimeZone() (name string, offsetMinutes int16) {
 		currentBias += tzInfo.StandardBias
 		zoneName = syscall.UTF16ToString(tzInfo.StandardName[:])
 
-	default: // TIME_ZONE_ID_UNKNOWN (0) или любые другие состояния
+	default: // TIME_ZONE_ID_UNKNOWN (0) or other states
 		zoneName = syscall.UTF16ToString(tzInfo.StandardName[:])
 	}
 
+	// #nosec G115 -- Time zone offset is always within int16 range (UTC-12 to UTC+14 = -720 to 840 minutes)
 	offsetMinutes = -int16(currentBias)
 	return zoneName, offsetMinutes
 }
 
-// collectHardwareInfo собирает информацию о железе из BIOS
+// collectHardwareInfo collects hardware information from BIOS
 func (c *HostCollector) collectHardwareInfo(info *models.HostInfo) {
 	k, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
@@ -206,7 +215,7 @@ func (c *HostCollector) collectHardwareInfo(info *models.HostInfo) {
 		_ = k.Close()
 	}()
 
-	// Системная информация
+	// System information
 	if manufacturer, _, err := k.GetStringValue("SystemManufacturer"); err == nil {
 		info.Manufacturer = manufacturer
 	}
@@ -231,7 +240,7 @@ func (c *HostCollector) collectHardwareInfo(info *models.HostInfo) {
 		info.SerialNumber = serial
 	}
 
-	// BIOS информация
+	// BIOS information
 	if biosVendor, _, err := k.GetStringValue("BIOSVendor"); err == nil {
 		info.BIOSVendor = biosVendor
 	}
@@ -244,15 +253,17 @@ func (c *HostCollector) collectHardwareInfo(info *models.HostInfo) {
 		info.BIOSDate = biosDate
 	}
 
+	// #nosec G115 -- BIOS major release is a small number (typically 0-255)
 	if majorRelease, _, err := k.GetIntegerValue("BiosMajorRelease"); err == nil {
 		info.BIOSMajorRelease = uint32(majorRelease)
 	}
 
+	// #nosec G115 -- BIOS minor release is a small number (typically 0-255)
 	if minorRelease, _, err := k.GetIntegerValue("BiosMinorRelease"); err == nil {
 		info.BIOSMinorRelease = uint32(minorRelease)
 	}
 
-	// Информация о материнской плате
+	// Motherboard information
 	if boardManufacturer, _, err := k.GetStringValue("BaseBoardManufacturer"); err == nil {
 		info.BaseBoardManufacturer = boardManufacturer
 	}

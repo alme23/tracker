@@ -5,22 +5,26 @@ import (
 	"net"
 )
 
-// IPAssignment — низкоуровневый тип (1 байт) для хранения способа получения IP
+// IPAssignment is a lightweight type (1 byte) for storing how IP was assigned
 type IPAssignment uint8
 
-// Объявляем энум через iota. Числа присвоятся автоматически (0, 1, 2, 3)
+// IP assignment methods
 const (
+	// AssignmentUnknown means the assignment method is unknown
 	AssignmentUnknown IPAssignment = iota
+	// AssignmentDHCP means IP was assigned via DHCP
 	AssignmentDHCP
+	// AssignmentStatic means IP was statically assigned
 	AssignmentStatic
+	// AssignmentNotApps means IP assignment is not applicable (loopback)
 	AssignmentNotApps
 )
 
-// String возвращает текстовое представление (полезно для логов или printf)
+// String returns the string representation of IPAssignment
 func (a IPAssignment) String() string {
 	switch a {
 	case AssignmentUnknown:
-		return "UNKNOWN"
+		return UNKNOWN
 	case AssignmentDHCP:
 		return "DHCP"
 	case AssignmentStatic:
@@ -28,17 +32,16 @@ func (a IPAssignment) String() string {
 	case AssignmentNotApps:
 		return "NOT_APPLICABLE"
 	default:
-		return "UNKNOWN"
+		return UNKNOWN
 	}
 }
 
-// MarshalJSON перехватывает стандартный маршалинг Go и превращает число в понятную строку для JSON
+// MarshalJSON serializes IPAssignment to JSON
 func (a IPAssignment) MarshalJSON() ([]byte, error) {
-	// Сериализуем строковое представление нашей константы
 	return json.Marshal(a.String())
 }
 
-// UnmarshalJSON (опционально) позволит серверу правильно распарсить строку обратно в наш uint8
+// UnmarshalJSON deserializes IPAssignment from JSON
 func (a *IPAssignment) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
@@ -58,23 +61,32 @@ func (a *IPAssignment) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// InterfaceType is a lightweight type for storing network interface type
 type InterfaceType uint8
 
+// Network interface types
 const (
+	// TypeUnknown means the interface type is unknown
 	TypeUnknown InterfaceType = iota
+	// TypeEthernet is an Ethernet interface
 	TypeEthernet
+	// TypeWireless is a wireless (Wi-Fi) interface
 	TypeWireless
+	// TypeLoopback is a loopback interface
 	TypeLoopback
+	// TypeTunnel is a tunnel interface
 	TypeTunnel
+	// TypePPP is a Point-to-Point Protocol interface
 	TypePPP
+	// TypeOther is another interface type
 	TypeOther
 )
 
-// String возвращает тип интерфейса в UPPERCASE-стиле
+// String returns the string representation of InterfaceType
 func (t InterfaceType) String() string {
 	switch t {
 	case TypeUnknown:
-		return "UNKNOWN"
+		return UNKNOWN
 	case TypeEthernet:
 		return "ETHERNET"
 	case TypeWireless:
@@ -88,11 +100,16 @@ func (t InterfaceType) String() string {
 	case TypeOther:
 		return "OTHER"
 	default:
-		return "UNKNOWN"
+		return UNKNOWN
 	}
 }
 
-// UnmarshalJSON (опционально) позволит серверу правильно распарсить строку обратно в наш uint8
+// MarshalJSON serializes InterfaceType to JSON
+func (t InterfaceType) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.String())
+}
+
+// UnmarshalJSON deserializes InterfaceType from JSON
 func (t *InterfaceType) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
@@ -118,18 +135,17 @@ func (t *InterfaceType) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (t InterfaceType) MarshalJSON() ([]byte, error) { return json.Marshal(t.String()) }
-
-// InterfaceInfo содержит детальную информацию о сетевом адаптере
+// InterfaceInfo contains detailed information about a network adapter
 type InterfaceInfo struct {
-	Index        int           `json:"index"`
-	Name         string        `json:"name"`
-	Description  string        `json:"description"`
-	MAC          string        `json:"mac"`
-	Type         InterfaceType `json:"type"`
-	Operational  bool          `json:"operational"`
-	IPAssignment IPAssignment  `json:"ip_assignment"` // Наш супер-легкий тип
-	IPAddresses  []net.IP      `json:"ip_addresses"`
+	Index        int           `json:"index"`         // Interface index
+	Name         string        `json:"name"`          // Interface name (GUID)
+	Description  string        `json:"description"`   // Interface description
+	MAC          string        `json:"mac"`           // MAC address
+	Type         InterfaceType `json:"type"`          // Interface type
+	Operational  bool          `json:"operational"`   // Whether interface is up
+	IPAssignment IPAssignment  `json:"ip_assignment"` // How IP was assigned
+	IPAddresses  []net.IP      `json:"ip_addresses"`  // List of IP addresses
 }
 
+// NetworkStatuses is a slice of InterfaceInfo
 type NetworkStatuses []InterfaceInfo

@@ -1,15 +1,14 @@
-// tracker/internal/models/user.go
 package models
 
-// UserInfo содержит информацию о текущем пользователе
+// UserInfo contains information about the current user
 type UserInfo struct {
-	Username     string `json:"username"`       // Имя пользователя в формате DOMAIN\Username
-	FullName     string `json:"full_name"`      // Полное имя
-	Domain       string `json:"domain"`         // Короткое имя домена (или пусто для локальных)
-	DomainFull   string `json:"domain_full"`    // Полное имя домена (пусто для рабочей группы)
-	Workgroup    string `json:"workgroup"`      // Рабочая группа (если не в домене)
-	ProfilePath  string `json:"profile_path"`   // Путь к профилю
-	IsAdmin      bool   `json:"is_admin"`       // Администратор ли
-	IsDomainUser bool   `json:"is_domain_user"` // Доменный ли пользователь
-	IsLocalUser  bool   `json:"is_local_user"`  // Локальный ли пользователь
+	Username     string `json:"username"`       // Username in DOMAIN\Username format
+	FullName     string `json:"full_name"`      // Full display name
+	Domain       string `json:"domain"`         // Short domain name (empty for local users)
+	DomainFull   string `json:"domain_full"`    // Full domain name (empty for workgroup)
+	Workgroup    string `json:"workgroup"`      // Workgroup name (if not in a domain)
+	ProfilePath  string `json:"profile_path"`   // User profile path
+	IsAdmin      bool   `json:"is_admin"`       // Whether user is an administrator
+	IsDomainUser bool   `json:"is_domain_user"` // Whether user is a domain user
+	IsLocalUser  bool   `json:"is_local_user"`  // Whether user is a local user
 }

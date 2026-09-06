@@ -7,35 +7,35 @@ import (
 	"github.com/google/uuid"
 )
 
-// OSInfo содержит детальную информацию об операционной системе
+// OSInfo contains detailed information about the operating system
 type OSInfo struct {
-	Name             string         `json:"name"`
-	Edition          string         `json:"edition"` // НОВОЕ: Редакция ОС (например, "ENTERPRISE", "PRO")
-	BuildNumber      string         `json:"build_number"`
-	KernelVersion    string         `json:"kernel_version"`
-	Architecture     ArchFamilyType `json:"architecture"`
-	Locale           string         `json:"locale"`
-	InstallDate      int64          `json:"install_date"`
-	InstallationType string         `json:"installation_type"`
-	PowerShellVer    string         `json:"powershell_version"`
-	SecureBootLines  bool           `json:"secure_boot"`
-	MachineGUID      BinaryUUID     `json:"machine_guid"`
-	ProductID        string         `json:"product_id"`
-	RegisteredOwner  string         `json:"registered_owner"`
-	RegisteredOrg    string         `json:"registered_organization"`
-	IsVirtual        bool           `json:"is_virtual"`
-	IsHypervisor     bool           `json:"is_hypervisor"`
+	Name             string         `json:"name"`                    // OS name (e.g., "Windows 10 Pro")
+	Edition          string         `json:"edition"`                 // OS edition (e.g., "Professional")
+	BuildNumber      string         `json:"build_number"`            // Build number (e.g., "19045")
+	KernelVersion    string         `json:"kernel_version"`          // Kernel version (e.g., "10.0.19045")
+	Architecture     ArchFamilyType `json:"architecture"`            // CPU architecture
+	Locale           string         `json:"locale"`                  // System locale (e.g., "en-US")
+	InstallDate      int64          `json:"install_date"`            // Install date as Unix timestamp
+	InstallationType string         `json:"installation_type"`       // "Client" or "Server"
+	PowerShellVer    string         `json:"powershell_version"`      // PowerShell version
+	SecureBootLines  bool           `json:"secure_boot"`             // Whether Secure Boot is enabled
+	MachineGUID      BinaryUUID     `json:"machine_guid"`            // Machine GUID
+	ProductID        string         `json:"product_id"`              // Windows product ID
+	RegisteredOwner  string         `json:"registered_owner"`        // Registered owner name
+	RegisteredOrg    string         `json:"registered_organization"` // Registered organization
+	IsVirtual        bool           `json:"is_virtual"`              // Whether running on a VM
+	IsHypervisor     bool           `json:"is_hypervisor"`           // Whether running as hypervisor host
 }
 
-// GetInstallDateString возвращает дату установки в формате "YYYY-MM-DD"
+// GetInstallDateString returns the install date in "YYYY-MM-DD" format
 func (o *OSInfo) GetInstallDateString() string {
 	if o.InstallDate == 0 {
-		return "UNKNOWN"
+		return UNKNOWN
 	}
 	return time.Unix(o.InstallDate, 0).Format("2006-01-02")
 }
 
-// GetInstallDateTime возвращает дату установки как time.Time
+// GetInstallDateTime returns the install date as time.Time
 func (o *OSInfo) GetInstallDateTime() time.Time {
 	if o.InstallDate == 0 {
 		return time.Time{}
@@ -43,20 +43,20 @@ func (o *OSInfo) GetInstallDateTime() time.Time {
 	return time.Unix(o.InstallDate, 0)
 }
 
-// BinaryUUID представляет собой ультра-легкие 16 байт памяти для хранения UUID
+// BinaryUUID is an ultra-lightweight 16-byte UUID representation
 type BinaryUUID uuid.UUID
 
-// String возвращает стандартное строковое представление UUID (с дефисами)
+// String returns the standard string representation of the UUID (with hyphens)
 func (b BinaryUUID) String() string {
 	return uuid.UUID(b).String()
 }
 
-// MarshalJSON превращает 16 байт в красивую строку UUID при генерации JSON
+// MarshalJSON converts 16 bytes to a UUID string during JSON generation
 func (b BinaryUUID) MarshalJSON() ([]byte, error) {
 	return json.Marshal(b.String())
 }
 
-// UnmarshalJSON позволяет парсить текстовую строку UUID обратно в 16 байт
+// UnmarshalJSON parses a UUID string back to 16 bytes
 func (b *BinaryUUID) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
@@ -72,29 +72,30 @@ func (b *BinaryUUID) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ArchFamilyType представляет собой семейство архитектур процессоров.
-// Полностью дублирует внутренний системный тип рантайма Go (internal/goarch).
+// ArchFamilyType represents a processor architecture family
 type ArchFamilyType int
 
+// Processor architecture families
 const (
-	AMD64       ArchFamilyType = iota // 0
-	ARM                               // 1
-	ARM64                             // 2
-	I386                              // 3
-	LOONG64                           // 4
-	MIPS                              // 5
-	MIPS64                            // 6
-	PPC64                             // 7
-	RISCV64                           // 8
-	S390X                             // 9
-	WASM                              // 10
-	UnknownArch                       // Наш фолбек на случай непредвиденных систем
+	AMD64       ArchFamilyType = iota // AMD64 is the x86-64 architecture
+	ARM                               // ARM is the 32-bit ARM architecture
+	ARM64                             // ARM64 is the 64-bit ARM architecture
+	I386                              // I386 is the 32-bit x86 architecture
+	LOONG64                           // LOONG64 is the LoongArch 64-bit architecture
+	MIPS                              // MIPS is the MIPS 32-bit architecture
+	MIPS64                            // MIPS64 is the MIPS 64-bit architecture
+	PPC64                             // PPC64 is the PowerPC 64-bit architecture
+	RISCV64                           // RISCV64 is the RISC-V 64-bit architecture
+	S390X                             // S390X is the IBM z/Architecture
+	WASM                              // WASM is the WebAssembly architecture
+	UnknownArch                       // UnknownArch is a fallback for unexpected systems
 )
 
+// String returns the string representation of ArchFamilyType
 func (a ArchFamilyType) String() string {
 	switch a {
 	case UnknownArch:
-		return "UNKNOWN"
+		return UNKNOWN
 	case AMD64:
 		return "AMD64"
 	case ARM:
@@ -118,12 +119,16 @@ func (a ArchFamilyType) String() string {
 	case WASM:
 		return "WASM"
 	default:
-		return "UNKNOWN"
+		return UNKNOWN
 	}
 }
 
-func (a ArchFamilyType) MarshalJSON() ([]byte, error) { return json.Marshal(a.String()) }
+// MarshalJSON serializes ArchFamilyType to JSON
+func (a ArchFamilyType) MarshalJSON() ([]byte, error) {
+	return json.Marshal(a.String())
+}
 
+// UnmarshalJSON deserializes ArchFamilyType from JSON
 func (a *ArchFamilyType) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {

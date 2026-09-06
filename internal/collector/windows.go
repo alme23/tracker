@@ -1,12 +1,12 @@
-// tracker/internal/collector/windows.go
-
 //go:build windows
 
 package collector
 
 import "syscall"
 
+// WinAPI procedure declarations
 var (
+	// kernel32.dll procedures
 	modKernel32                          = syscall.NewLazyDLL("kernel32.dll")
 	procGetLogicalProcessorInformationEx = modKernel32.NewProc("GetLogicalProcessorInformationEx")
 	procGlobalMemoryStatusEx             = modKernel32.NewProc("GlobalMemoryStatusEx")
@@ -18,14 +18,16 @@ var (
 	procGetSystemFirmwareTable           = modKernel32.NewProc("GetSystemFirmwareTable")
 	procGetSystemDefaultLocaleName       = modKernel32.NewProc("GetSystemDefaultLocaleName")
 
+	// ntdll.dll procedures
 	modNtdll          = syscall.NewLazyDLL("ntdll.dll")
 	procRtlGetVersion = modNtdll.NewProc("RtlGetVersion")
 
+	// advapi32.dll and secur32.dll procedures
 	modAdvapi32              = syscall.NewLazyDLL("advapi32.dll")
 	modSecur32               = syscall.NewLazyDLL("secur32.dll")
 	modNetapi32              = syscall.NewLazyDLL("netapi32.dll")
 	procGetUserNameEx        = modSecur32.NewProc("GetUserNameExW")
 	procCheckTokenMembership = modAdvapi32.NewProc("CheckTokenMembership")
 	procNetUserGetInfo       = modNetapi32.NewProc("NetUserGetInfo")
-	procNetApiBufferFree     = modNetapi32.NewProc("NetApiBufferFree")
+	procNetAPIBufferFree     = modNetapi32.NewProc("NetApiBufferFree")
 )

@@ -110,7 +110,7 @@ func TestUserGetUserName(t *testing.T) {
 		{"SamCompatible", nameSamCompatible},
 		{"Display", nameDisplay},
 		{"UserPrincipal", nameUserPrincipal},
-		{"DnsDomain", nameDnsDomain},
+		{"DnsDomain", nameDNSDomain},
 	}
 
 	for _, tt := range tests {

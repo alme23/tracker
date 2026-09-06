@@ -1,7 +1,7 @@
-// internal/server/server.go
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -15,14 +15,14 @@ import (
 	"github.com/alme23/tracker/internal/secproto"
 )
 
-// Config содержит настройки сервера
+// Config contains server settings
 type Config struct {
-	ListenAddr   string
-	SharedSecret string
-	DBPath       string
+	ListenAddr   string // Address to listen on (e.g., ":8443")
+	SharedSecret string // Shared secret key for decryption
+	DBPath       string // Path to SQLite database
 }
 
-// Server принимает данные от агентов
+// Server accepts data from agents
 type Server struct {
 	config   Config
 	storage  *Storage
@@ -35,11 +35,11 @@ type Server struct {
 	done    chan struct{}
 }
 
-// New создает новый сервер
+// New creates a new server
 func New(cfg Config) (*Server, error) {
 	storage, err := NewStorage(cfg.DBPath)
 	if err != nil {
-		return nil, fmt.Errorf("создание хранилища: %w", err)
+		return nil, fmt.Errorf("storage creation: %w", err)
 	}
 
 	return &Server{
@@ -50,11 +50,14 @@ func New(cfg Config) (*Server, error) {
 	}, nil
 }
 
-// Start запускает сервер
+// Start starts the server
 func (s *Server) Start() error {
-	listener, err := net.Listen("tcp", s.config.ListenAddr)
+	// Create listen config with context
+	lc := &net.ListenConfig{}
+
+	listener, err := lc.Listen(context.Background(), "tcp", s.config.ListenAddr)
 	if err != nil {
-		return fmt.Errorf("запуск listener: %w", err)
+		return fmt.Errorf("listener startup: %w", err)
 	}
 	s.listener = listener
 
@@ -62,7 +65,7 @@ func (s *Server) Start() error {
 	s.running = true
 	s.mu.Unlock()
 
-	log.Printf("Сервер запущен на %s", s.config.ListenAddr)
+	log.Printf("Server started on %s", s.config.ListenAddr)
 
 	for {
 		conn, err := listener.Accept()
@@ -72,14 +75,14 @@ func (s *Server) Start() error {
 			s.mu.RUnlock()
 
 			if !running {
-				return nil // Сервер остановлен
+				return nil // Server stopped
 			}
 
-			log.Printf("Ошибка accept: %v", err)
+			log.Printf("Accept error: %v", err)
 			continue
 		}
 
-		// Регистрируем соединение
+		// Register connection
 		s.mu.Lock()
 		s.conns[conn] = struct{}{}
 		s.mu.Unlock()
@@ -89,38 +92,38 @@ func (s *Server) Start() error {
 	}
 }
 
-// RunWithSignals запускает сервер с обработкой системных сигналов
+// RunWithSignals starts the server with system signal handling
 func (s *Server) RunWithSignals() error {
-	// Канал для сигналов
+	// Signal channel
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Канал для ошибок сервера
+	// Error channel
 	errChan := make(chan error, 1)
 
-	// Запускаем сервер в горутине
+	// Start server in goroutine
 	go func() {
 		errChan <- s.Start()
 	}()
 
-	log.Printf("Сервер запущен. Нажмите Ctrl+C для остановки")
+	log.Printf("Server started. Press Ctrl+C to stop")
 
-	// Ждем сигнал или ошибку
+	// Wait for signal or error
 	select {
 	case sig := <-sigChan:
-		log.Printf("Получен сигнал %v", sig)
+		log.Printf("Received signal %v", sig)
 		s.Stop()
 		return nil
 
 	case err := <-errChan:
 		if err != nil {
-			return fmt.Errorf("ошибка сервера: %w", err)
+			return fmt.Errorf("server error: %w", err)
 		}
 		return nil
 	}
 }
 
-// Stop останавливает сервер с graceful shutdown
+// Stop stops the server with graceful shutdown
 func (s *Server) Stop() {
 	s.mu.Lock()
 	if !s.running {
@@ -130,23 +133,23 @@ func (s *Server) Stop() {
 	s.running = false
 	s.mu.Unlock()
 
-	log.Println("Остановка сервера...")
+	log.Println("Stopping server...")
 
-	// 1. Закрываем listener
+	// 1. Close listener
 	if s.listener != nil {
-		s.listener.Close()
-		log.Println("Listener закрыт")
+		_ = s.listener.Close()
+		log.Println("Listener closed")
 	}
 
-	// 2. Закрываем активные соединения
+	// 2. Close active connections
 	s.mu.Lock()
 	for conn := range s.conns {
-		conn.Close()
+		_ = conn.Close()
 	}
 	s.mu.Unlock()
-	log.Println("Активные соединения закрыты")
+	log.Println("Active connections closed")
 
-	// 3. Ждем завершения обработчиков
+	// 3. Wait for handlers to complete
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
@@ -155,27 +158,27 @@ func (s *Server) Stop() {
 
 	select {
 	case <-done:
-		log.Println("Все обработчики завершены")
+		log.Println("All handlers completed")
 	case <-time.After(10 * time.Second):
-		log.Println("Таймаут ожидания обработчиков")
+		log.Println("Handler wait timeout")
 	}
 
-	// 4. Финальная очистка
+	// 4. Final cleanup
 	if err := s.storage.CleanupOldData(); err != nil {
-		log.Printf("Ошибка финальной очистки: %v", err)
+		log.Printf("Final cleanup error: %v", err)
 	}
 
-	// 5. Закрываем хранилище
+	// 5. Close storage
 	if s.storage != nil {
-		s.storage.Close()
-		log.Println("База данных закрыта")
+		_ = s.storage.Close()
+		log.Println("Database closed")
 	}
 
 	close(s.done)
-	log.Println("Сервер остановлен")
+	log.Println("Server stopped")
 }
 
-// handleConnection обрабатывает одно соединение
+// handleConnection processes a single connection
 func (s *Server) handleConnection(conn net.Conn) {
 	defer func() {
 		s.mu.Lock()
@@ -183,33 +186,33 @@ func (s *Server) handleConnection(conn net.Conn) {
 		s.mu.Unlock()
 
 		s.wg.Done()
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	remoteAddr := conn.RemoteAddr().String()
-	log.Printf("Подключение от %s", remoteAddr)
+	log.Printf("Connection from %s", remoteAddr)
 
-	// Принимаем и расшифровываем данные
+	// Receive and decrypt data
 	data, err := secproto.HandleConnection(conn, s.config.SharedSecret)
 	if err != nil {
-		log.Printf("Ошибка secproto от %s: %v", remoteAddr, err)
+		log.Printf("secproto error from %s: %v", remoteAddr, err)
 		return
 	}
 
-	// Декодируем бинарные данные
+	// Decode binary data
 	decoder := binproto.NewDecoder(data)
 	snapshot, err := decoder.Decode()
 	if err != nil {
-		log.Printf("Ошибка декодирования от %s: %v", remoteAddr, err)
+		log.Printf("Decode error from %s: %v", remoteAddr, err)
 		return
 	}
 
-	// Сохраняем в БД
+	// Save to database
 	if err := s.storage.SaveSnapshot(snapshot); err != nil {
-		log.Printf("Ошибка сохранения от %s: %v", remoteAddr, err)
+		log.Printf("Save error from %s: %v", remoteAddr, err)
 		return
 	}
 
-	log.Printf("Данные сохранены: hostname=%s, user=%s",
+	log.Printf("Data saved: hostname=%s, user=%s",
 		snapshot.Host.Hostname, snapshot.User.Username)
 }

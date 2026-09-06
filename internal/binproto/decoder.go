@@ -1,10 +1,9 @@
-// tracker/internal/binproto/decoder.go
-
 package binproto
 
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,84 +11,87 @@ import (
 	"github.com/alme23/tracker/internal/models"
 )
 
-// Decoder декодирует бинарные данные обратно в SystemSnapshot
+// Static errors
+var (
+	ErrInvalidMagicHeader = errors.New("invalid magic header")
+	ErrReadMagicHeader    = errors.New("failed to read magic header")
+	ErrReadTimestamp      = errors.New("failed to read timestamp")
+)
+
+// Decoder decodes binary data back into SystemSnapshot
 type Decoder struct {
 	buf *bytes.Reader
 }
 
-// NewDecoder создает декодер из бинарных данных
+// NewDecoder creates a decoder from binary data
 func NewDecoder(data []byte) *Decoder {
 	return &Decoder{
 		buf: bytes.NewReader(data),
 	}
 }
 
-func (d *Decoder) Reset(data []byte) {
-	d.buf.Reset(data)
-}
-
-// Decode десериализует бинарные данные в SystemSnapshot
+// Decode deserializes binary data into SystemSnapshot
 func (d *Decoder) Decode() (*models.SystemSnapshot, error) {
-	// Проверяем magic header
+	// Check magic header
 	magic := make([]byte, 5)
 	if _, err := io.ReadFull(d.buf, magic); err != nil {
-		return nil, fmt.Errorf("read magic header: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrReadMagicHeader, err)
 	}
 	if string(magic) != MagicHeader {
-		return nil, fmt.Errorf("invalid magic header: %q", magic)
+		return nil, fmt.Errorf("%w: got %q, want %q", ErrInvalidMagicHeader, magic, MagicHeader)
 	}
 
 	snapshot := &models.SystemSnapshot{}
 
 	// Timestamp (int64)
 	if err := binary.Read(d.buf, binary.LittleEndian, &snapshot.Timestamp); err != nil {
-		return nil, fmt.Errorf("read timestamp: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrReadTimestamp, err)
 	}
 
 	// User
 	if err := d.decodeUser(&snapshot.User); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode user: %w", err)
 	}
 
 	// OS
 	if err := d.decodeOS(&snapshot.OS); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode os: %w", err)
 	}
 
 	// Processor
 	if err := d.decodeProcessor(&snapshot.Processor); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode processor: %w", err)
 	}
 
 	// RAM
 	if err := d.decodeRAM(&snapshot.RAM); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode ram: %w", err)
 	}
 
 	// Drives
 	if err := d.decodeDrives(&snapshot.Drives); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode drives: %w", err)
 	}
 
 	// Services
 	if err := d.decodeServices(&snapshot.Services); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode services: %w", err)
 	}
 
 	// Network
 	if err := d.decodeNetwork(&snapshot.Network); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode network: %w", err)
 	}
 
 	// Host
 	if err := d.decodeHost(&snapshot.Host); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode host: %w", err)
 	}
 
 	return snapshot, nil
 }
 
-// readString читает строку с 2-байтовой длиной
+// readString reads a string with 2-byte length prefix
 func (d *Decoder) readString() (string, error) {
 	var length uint16
 	if err := binary.Read(d.buf, binary.LittleEndian, &length); err != nil {
@@ -104,7 +106,7 @@ func (d *Decoder) readString() (string, error) {
 	return string(buf), nil
 }
 
-// decodeUser декодирует UserInfo
+// decodeUser decodes UserInfo
 func (d *Decoder) decodeUser(u *models.UserInfo) error {
 	var err error
 	if u.Username, err = d.readString(); err != nil {
@@ -137,7 +139,7 @@ func (d *Decoder) decodeUser(u *models.UserInfo) error {
 	return nil
 }
 
-// decodeOS декодирует OSInfo
+// decodeOS decodes OSInfo
 func (d *Decoder) decodeOS(o *models.OSInfo) error {
 	var err error
 	if o.Name, err = d.readString(); err != nil {
@@ -189,7 +191,7 @@ func (d *Decoder) decodeOS(o *models.OSInfo) error {
 	o.IsVirtual = flags&0x02 != 0
 	o.IsHypervisor = flags&0x04 != 0
 
-	// MachineGUID (16 байт)
+	// MachineGUID (16 bytes)
 	guidBytes := make([]byte, 16)
 	if _, err := io.ReadFull(d.buf, guidBytes); err != nil {
 		return err
@@ -199,7 +201,7 @@ func (d *Decoder) decodeOS(o *models.OSInfo) error {
 	return nil
 }
 
-// decodeProcessor декодирует ProcessorInfo
+// decodeProcessor decodes ProcessorInfo
 func (d *Decoder) decodeProcessor(p *models.ProcessorInfo) error {
 	var err error
 	if p.Model, err = d.readString(); err != nil {
@@ -240,7 +242,7 @@ func (d *Decoder) decodeProcessor(p *models.ProcessorInfo) error {
 	return binary.Read(d.buf, binary.LittleEndian, &p.L3CacheBytes)
 }
 
-// decodeRAM декодирует RAMInfo
+// decodeRAM decodes RAMInfo
 func (d *Decoder) decodeRAM(r *models.RAMInfo) error {
 	if err := binary.Read(d.buf, binary.LittleEndian, &r.TotalBytes); err != nil {
 		return err
@@ -270,7 +272,7 @@ func (d *Decoder) decodeRAM(r *models.RAMInfo) error {
 	return nil
 }
 
-// decodeStick декодирует RAMStick
+// decodeStick decodes RAMStick
 func (d *Decoder) decodeStick(s *models.RAMStick) error {
 	var err error
 	if s.Slot, err = d.readString(); err != nil {
@@ -294,7 +296,7 @@ func (d *Decoder) decodeStick(s *models.RAMStick) error {
 	return nil
 }
 
-// decodeDrives декодирует DiskStatuses
+// decodeDrives decodes DiskStatuses
 func (d *Decoder) decodeDrives(drives *models.DiskStatuses) error {
 	var count uint16
 	if err := binary.Read(d.buf, binary.LittleEndian, &count); err != nil {
@@ -310,7 +312,7 @@ func (d *Decoder) decodeDrives(drives *models.DiskStatuses) error {
 	return nil
 }
 
-// decodeDrive декодирует DriveInfo
+// decodeDrive decodes DriveInfo
 func (d *Decoder) decodeDrive(drive *models.DriveInfo) error {
 	var err error
 	if drive.Letter, err = d.readString(); err != nil {
@@ -351,7 +353,7 @@ func (d *Decoder) decodeDrive(drive *models.DriveInfo) error {
 	return nil
 }
 
-// decodeServices декодирует ServicesStatuses
+// decodeServices decodes ServicesStatuses
 func (d *Decoder) decodeServices(services *models.ServicesStatuses) error {
 	var count uint16
 	if err := binary.Read(d.buf, binary.LittleEndian, &count); err != nil {
@@ -367,7 +369,7 @@ func (d *Decoder) decodeServices(services *models.ServicesStatuses) error {
 	return nil
 }
 
-// decodeService декодирует ServiceStatus
+// decodeService decodes ServiceStatus
 func (d *Decoder) decodeService(s *models.ServiceStatus) error {
 	var err error
 	if s.Name, err = d.readString(); err != nil {
@@ -388,7 +390,7 @@ func (d *Decoder) decodeService(s *models.ServiceStatus) error {
 	return binary.Read(d.buf, binary.LittleEndian, &s.Port)
 }
 
-// decodeNetwork декодирует NetworkStatuses
+// decodeNetwork decodes NetworkStatuses
 func (d *Decoder) decodeNetwork(network *models.NetworkStatuses) error {
 	var count uint16
 	if err := binary.Read(d.buf, binary.LittleEndian, &count); err != nil {
@@ -404,9 +406,8 @@ func (d *Decoder) decodeNetwork(network *models.NetworkStatuses) error {
 	return nil
 }
 
-// decodeInterface декодирует InterfaceInfo
+// decodeInterface decodes InterfaceInfo
 func (d *Decoder) decodeInterface(i *models.InterfaceInfo) error {
-	// Index как int32
 	var index int32
 	if err := binary.Read(d.buf, binary.LittleEndian, &index); err != nil {
 		return fmt.Errorf("read index: %w", err)
@@ -442,7 +443,6 @@ func (d *Decoder) decodeInterface(i *models.InterfaceInfo) error {
 	}
 	i.IPAssignment = models.IPAssignment(assignByte)
 
-	// IP Addresses
 	var ipCount uint8
 	if err := binary.Read(d.buf, binary.LittleEndian, &ipCount); err != nil {
 		return err
@@ -464,7 +464,7 @@ func (d *Decoder) decodeInterface(i *models.InterfaceInfo) error {
 	return nil
 }
 
-// decodeHost декодирует HostInfo
+// decodeHost decodes HostInfo
 func (d *Decoder) decodeHost(h *models.HostInfo) error {
 	strings := []*string{
 		&h.Hostname, &h.FQDN, &h.PhysicalHostname, &h.PhysicalFQDN,

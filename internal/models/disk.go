@@ -1,4 +1,3 @@
-// tracker/internal/models/disk.go
 package models
 
 import (
@@ -6,23 +5,32 @@ import (
 	"fmt"
 )
 
-// DriveType — легкий тип (1 байт) для хранения физического типа диска
+// DriveType is a lightweight type (1 byte) for storing the physical drive type
 type DriveType uint8
 
+// Physical drive types
 const (
-	DriveUnknown   DriveType = iota
-	DriveNoRootDir           // Диск без корневой директории
-	DriveRemovable           // Съемный диск (флешка, внешний USB-накопитель)
-	DriveFixed               // Встроенный HDD/SSD/NVMe
-	DriveRemote              // Сетевой диск (SMB/NFS)
-	DriveCDROM               // Оптический привод CD/DVD/Blu-ray
-	DriveRAM                 // Виртуальный диск в оперативной памяти
+	// DriveUnknown means the drive type is unknown
+	DriveUnknown DriveType = iota
+	// DriveNoRootDir means the drive has no root directory
+	DriveNoRootDir
+	// DriveRemovable is a removable drive (USB flash, external HDD)
+	DriveRemovable
+	// DriveFixed is a fixed drive (HDD/SSD/NVMe)
+	DriveFixed
+	// DriveRemote is a network drive (SMB/NFS)
+	DriveRemote
+	// DriveCDROM is an optical drive (CD/DVD/Blu-ray)
+	DriveCDROM
+	// DriveRAM is a virtual RAM disk
+	DriveRAM
 )
 
+// String returns the string representation of DriveType
 func (t DriveType) String() string {
 	switch t {
 	case DriveUnknown:
-		return "UNKNOWN"
+		return UNKNOWN
 	case DriveNoRootDir:
 		return "NO_ROOT_DIR"
 	case DriveRemovable:
@@ -36,14 +44,16 @@ func (t DriveType) String() string {
 	case DriveRAM:
 		return "RAM_DISK"
 	default:
-		return "UNKNOWN"
+		return UNKNOWN
 	}
 }
 
+// MarshalJSON serializes DriveType to JSON
 func (t DriveType) MarshalJSON() ([]byte, error) {
 	return json.Marshal(t.String())
 }
 
+// UnmarshalJSON deserializes DriveType from JSON
 func (t *DriveType) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
@@ -68,38 +78,34 @@ func (t *DriveType) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// DriveInfo содержит детальную информацию о логическом диске
+// DriveInfo contains detailed information about a logical drive
 type DriveInfo struct {
-	Letter       string    `json:"letter"`        // Буква диска ("C:") или путь монтирования
-	Type         DriveType `json:"type"`          // Тип диска
-	FSType       string    `json:"fs_type"`       // Тип файловой системы ("NTFS", "exFAT")
-	TotalBytes   uint64    `json:"total_bytes"`   // Общий объем в байтах
-	FreeBytes    uint64    `json:"free_bytes"`    // Свободный объем в байтах
-	UsedBytes    uint64    `json:"used_bytes"`    // Использованный объем
-	VolumeName   string    `json:"volume_name"`   // Метка тома
-	SerialNumber uint32    `json:"serial_number"` // Серийный номер
-	IsReady      bool      `json:"is_ready"`      // Готов ли диск
+	Letter       string    `json:"letter"`        // Letter is the drive letter (e.g., "C:") or mount point path
+	Type         DriveType `json:"type"`          // Type is the physical drive type
+	FSType       string    `json:"fs_type"`       // FSType is the file system type (e.g., "NTFS", "exFAT")
+	TotalBytes   uint64    `json:"total_bytes"`   // TotalBytes is the total drive size in bytes
+	FreeBytes    uint64    `json:"free_bytes"`    // FreeBytes is the available free space in bytes
+	UsedBytes    uint64    `json:"used_bytes"`    // UsedBytes is the used space in bytes
+	VolumeName   string    `json:"volume_name"`   // VolumeName is the volume label
+	SerialNumber uint32    `json:"serial_number"` // SerialNumber is the raw volume serial number
+	IsReady      bool      `json:"is_ready"`      // IsReady indicates whether the drive is ready for use
 }
 
-// GetSerialNumberString возвращает серийный номер в формате "XXXX-XXXX"
+// GetSerialNumberString returns the serial number in "XXXX-XXXX" format
 func (d *DriveInfo) GetSerialNumberString() string {
 	if d.SerialNumber == 0 {
 		return ""
 	}
-
-	// Формат: XXXX-XXXX
-	return fmt.Sprintf("%04X-%04X",
-		(d.SerialNumber>>16)&0xFFFF,
-		d.SerialNumber&0xFFFF)
+	return fmt.Sprintf("%04X-%04X", (d.SerialNumber>>16)&0xFFFF, d.SerialNumber&0xFFFF)
 }
 
-// GetSerialNumberHex возвращает серийный номер в шестнадцатеричном формате
+// GetSerialNumberHex returns the serial number in hexadecimal format
 func (d *DriveInfo) GetSerialNumberHex() string {
 	if d.SerialNumber == 0 {
 		return ""
 	}
-
 	return fmt.Sprintf("%08X", d.SerialNumber)
 }
 
+// DiskStatuses is a slice of DriveInfo
 type DiskStatuses []DriveInfo

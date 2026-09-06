@@ -1,5 +1,3 @@
-// tracker/internal/collector/disk.go
-
 //go:build windows
 
 package collector
@@ -13,22 +11,24 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// DiskCollector collects information about disk volumes
 type DiskCollector struct{}
 
+// NewDiskCollector creates a new DiskCollector
 func NewDiskCollector() *DiskCollector {
 	return &DiskCollector{}
 }
 
-// Collect собирает информацию обо всех локальных томах
+// Collect gathers information about all local volumes
 func (c *DiskCollector) Collect() (models.DiskStatuses, error) {
 	var result models.DiskStatuses
 
 	var volBuf [50]uint16
 
-	// Использование unsafe.SliceData гарантирует безопасность границ массива для линтеров
+	// #nosec G103 -- safe use of unsafe.SliceData with local array
 	handle, err := windows.FindFirstVolume(unsafe.SliceData(volBuf[:]), uint32(len(volBuf)))
 	if err != nil {
-		return nil, fmt.Errorf("ошибка WinAPI FindFirstVolume: %w", err)
+		return nil, fmt.Errorf("WinAPI FindFirstVolume error: %w", err)
 	}
 	defer func() {
 		_ = windows.FindVolumeClose(handle)
@@ -41,6 +41,7 @@ func (c *DiskCollector) Collect() (models.DiskStatuses, error) {
 			result = append(result, info)
 		}
 
+		// #nosec G103 -- safe use of unsafe.SliceData with local array
 		if !c.nextVolume(handle, unsafe.SliceData(volBuf[:]), uint32(len(volBuf))) {
 			break
 		}
@@ -49,7 +50,7 @@ func (c *DiskCollector) Collect() (models.DiskStatuses, error) {
 	return result, nil
 }
 
-// processVolume обрабатывает один том
+// processVolume processes a single volume
 func (c *DiskCollector) processVolume(volumeGUIDPath string) (models.DriveInfo, bool) {
 	volumePtr, err := windows.UTF16PtrFromString(volumeGUIDPath)
 	if err != nil {
@@ -58,7 +59,7 @@ func (c *DiskCollector) processVolume(volumeGUIDPath string) (models.DriveInfo, 
 
 	rawDriveType := windows.GetDriveType(volumePtr)
 
-	// Отсекаем сетевые диски и неизвестные
+	// Skip network drives and unknown types
 	if rawDriveType == windows.DRIVE_REMOTE || rawDriveType == windows.DRIVE_UNKNOWN {
 		return models.DriveInfo{}, false
 	}
@@ -83,7 +84,7 @@ func (c *DiskCollector) processVolume(volumeGUIDPath string) (models.DriveInfo, 
 	return info, true
 }
 
-// mapDriveType преобразует системный тип в модель
+// mapDriveType converts a Windows drive type to the internal model
 func (c *DiskCollector) mapDriveType(rawType uint32) models.DriveType {
 	switch rawType {
 	case windows.DRIVE_FIXED:
@@ -103,11 +104,12 @@ func (c *DiskCollector) mapDriveType(rawType uint32) models.DriveType {
 	}
 }
 
-// getMountPath получает первый путь монтирования
+// getMountPath returns the first mount path of a volume
 func (c *DiskCollector) getMountPath(volumePtr *uint16) string {
 	var pathNamesBuf [1024]uint16
 	var returnLen uint32
 
+	// #nosec G103 -- safe use of unsafe.SliceData with local array
 	err := windows.GetVolumePathNamesForVolumeName(
 		volumePtr,
 		unsafe.SliceData(pathNamesBuf[:]),
@@ -119,11 +121,10 @@ func (c *DiskCollector) getMountPath(volumePtr *uint16) string {
 		return ""
 	}
 
-	// Читаем строго до returnLen, чтобы не сканировать лишний хвост буфера
 	return windows.UTF16ToString(pathNamesBuf[:returnLen])
 }
 
-// formatMountPath форматирует путь монтирования
+// formatMountPath formats a mount path (e.g., "C:\" -> "C:")
 func (c *DiskCollector) formatMountPath(mountPath string) string {
 	if len(mountPath) == 3 && mountPath[1] == ':' && mountPath[2] == '\\' {
 		return mountPath[:2]
@@ -131,7 +132,7 @@ func (c *DiskCollector) formatMountPath(mountPath string) string {
 	return strings.TrimSuffix(mountPath, "\\")
 }
 
-// collectVolumeInfoAndSpace собирает информацию о томе и свободном месте
+// collectVolumeInfoAndSpace collects volume information and free space
 func (c *DiskCollector) collectVolumeInfoAndSpace(info *models.DriveInfo, mountPathPtr *uint16) {
 	var volumeNameBuf [256]uint16
 	var volumeSerial uint32
@@ -140,7 +141,7 @@ func (c *DiskCollector) collectVolumeInfoAndSpace(info *models.DriveInfo, mountP
 	var fsNameBuf [256]uint16
 	var freeBytesAvailable, totalNumberOfBytes, totalNumberOfFreeBytes uint64
 
-	// Получаем информацию о томе
+	// #nosec G103 -- safe use of unsafe.SliceData with local array
 	err := windows.GetVolumeInformation(
 		mountPathPtr,
 		unsafe.SliceData(volumeNameBuf[:]),
@@ -154,15 +155,14 @@ func (c *DiskCollector) collectVolumeInfoAndSpace(info *models.DriveInfo, mountP
 
 	if err == nil {
 		info.VolumeName = windows.UTF16ToString(volumeNameBuf[:])
-		info.SerialNumber = volumeSerial // Родной uint32 серийник!
+		info.SerialNumber = volumeSerial
 		info.FSType = windows.UTF16ToString(fsNameBuf[:])
 		info.IsReady = true
 	} else {
-		info.FSType = "UNKNOWN"
+		info.FSType = UNKNOWN
 		info.IsReady = false
 	}
 
-	// Получаем информацию о размере только для готовых дисков
 	if info.IsReady {
 		err = windows.GetDiskFreeSpaceEx(
 			mountPathPtr,
@@ -179,7 +179,7 @@ func (c *DiskCollector) collectVolumeInfoAndSpace(info *models.DriveInfo, mountP
 	}
 }
 
-// nextVolume переходит к следующему тому
+// nextVolume moves to the next volume
 func (c *DiskCollector) nextVolume(handle windows.Handle, bufPtr *uint16, size uint32) bool {
 	err := windows.FindNextVolume(handle, bufPtr, size)
 	return err == nil

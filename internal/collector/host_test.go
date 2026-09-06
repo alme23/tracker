@@ -70,13 +70,13 @@ func TestHostGetComputerName(t *testing.T) {
 		nameType uint32
 	}{
 		{"NetBIOS", computerNameNetBIOS},
-		{"DNS Hostname", computerNameDnsHostname},
-		{"DNS Domain", computerNameDnsDomain},
-		{"DNS Fully Qualified", computerNameDnsFullyQualified},
+		{"DNS Hostname", computerNameDNSHostname},
+		{"DNS Domain", computerNameDNSDomain},
+		{"DNS Fully Qualified", computerNameDNSFullyQualified},
 		{"Physical NetBIOS", computerNamePhysicalNetBIOS},
-		{"Physical DNS Hostname", computerNamePhysicalDnsHostname},
-		{"Physical DNS Domain", computerNamePhysicalDnsDomain},
-		{"Physical DNS Fully Qualified", computerNamePhysicalDnsFullyQualified},
+		{"Physical DNS Hostname", computerNamePhysicalDNSHostname},
+		{"Physical DNS Domain", computerNamePhysicalDNSDomain},
+		{"Physical DNS Fully Qualified", computerNamePhysicalDNSFullyQualified},
 	}
 
 	for _, tt := range tests {
@@ -251,7 +251,7 @@ func BenchmarkHostGetComputerName(b *testing.B) {
 
 	b.ResetTimer()
 	for b.Loop() {
-		_ = collector.getComputerName(computerNameDnsHostname)
+		_ = collector.getComputerName(computerNameDNSHostname)
 	}
 }
 
