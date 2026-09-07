@@ -15,9 +15,12 @@ const MagicHeader = "TRCK1"
 
 // Static errors
 var (
-	ErrStringTooLong  = errors.New("string too long")
-	ErrWriteMagic     = errors.New("failed to write magic header")
-	ErrWriteTimestamp = errors.New("failed to write timestamp")
+	ErrStringTooLong          = errors.New("string too long")
+	ErrWriteMagic             = errors.New("failed to write magic header")
+	ErrWriteTimestamp         = errors.New("failed to write timestamp")
+	ErrArchitectureOutOfRange = errors.New("architecture value out of range")
+	ErrInvalidDataLength      = errors.New("invalid data length")
+	ErrBufferTooSmall         = errors.New("buffer too small")
 )
 
 // Encoder encodes SystemSnapshot into a compact binary format
@@ -95,7 +98,7 @@ func (e *Encoder) writeString(s string) error {
 		return fmt.Errorf("%w: %d bytes (max %d)", ErrStringTooLong, len(s), math.MaxUint16)
 	}
 
-	// #nosec G115 -- len(s) is already checked to be <= math.MaxUint16
+	// #nosec G115 -- len(s) is already checked to be < math.MaxUint16
 	length := uint16(len(s))
 	if err := binary.Write(e.buf, binary.LittleEndian, length); err != nil {
 		return err
@@ -146,7 +149,7 @@ func (e *Encoder) encodeOS(o *models.OSInfo) error {
 	// Safe conversion with bounds check
 	arch := o.Architecture
 	if arch < 0 || arch > math.MaxUint8 {
-		return fmt.Errorf("architecture value out of range: %d", arch)
+		return fmt.Errorf("%w: %d", ErrArchitectureOutOfRange, arch)
 	}
 	if err := binary.Write(e.buf, binary.LittleEndian, uint8(o.Architecture)); err != nil {
 		return err

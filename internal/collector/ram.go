@@ -59,6 +59,7 @@ func (c *RAMCollector) Collect() (models.RAMInfo, error) {
 	var memStatus memoryStatusEx
 	memStatus.dwLength = uint32(unsafe.Sizeof(memStatus))
 
+	// #nosec G103 -- Unsafe is required for Windows API GlobalMemoryStatusEx call
 	ret, _, err := procGlobalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&memStatus)))
 	if ret == 0 {
 		return info, fmt.Errorf("WinAPI GlobalMemoryStatusEx error: %w", err)
@@ -92,6 +93,7 @@ func (c *RAMCollector) getPhysicalSticksFromSMBIOS() ([]models.RAMStick, error) 
 	}
 
 	buffer := make([]byte, ret)
+	// #nosec G103 -- Unsafe is required for Windows API GetSystemFirmwareTable call
 	ret, _, err := procGetSystemFirmwareTable.Call(
 		uintptr(providerRSMB),
 		0,

@@ -191,6 +191,7 @@ func (c *UserCollector) getUserName(nameFormat uint32) string {
 	var size uint32 = 256
 	buffer := make([]uint16, size)
 
+	// #nosec G103 -- Windows API requires pointer
 	ret, _, _ := procGetUserNameEx.Call(
 		uintptr(nameFormat),
 		uintptr(unsafe.Pointer(unsafe.SliceData(buffer))),
@@ -221,6 +222,7 @@ func (c *UserCollector) getFullNameFromNetAPI(username string) string {
 	}
 
 	var userInfoPtr *userInfo3
+	// #nosec G103 -- Windows API requires pointer
 	ret, _, _ := procNetUserGetInfo.Call(
 		0,
 		uintptr(unsafe.Pointer(userNamePtr)),
@@ -234,6 +236,7 @@ func (c *UserCollector) getFullNameFromNetAPI(username string) string {
 
 	// Free memory
 	defer func() {
+		// #nosec G103 -- Windows API requires pointer
 		ret, _, _ := procNetAPIBufferFree.Call(uintptr(unsafe.Pointer(userInfoPtr)))
 		if ret != 0 {
 			// Free error — ignore
@@ -241,6 +244,7 @@ func (c *UserCollector) getFullNameFromNetAPI(username string) string {
 		}
 	}()
 
+	// #nosec G103 -- Windows API requires pointer
 	if userInfoPtr.FullName != nil {
 		return syscall.UTF16ToString((*[256]uint16)(unsafe.Pointer(userInfoPtr.FullName))[:])
 	}
@@ -256,6 +260,7 @@ func (c *UserCollector) isAdmin() bool {
 	}
 
 	var isMember bool
+	// #nosec G103 -- Windows API requires pointer
 	ret, _, _ := procCheckTokenMembership.Call(
 		0,
 		uintptr(unsafe.Pointer(sid)),

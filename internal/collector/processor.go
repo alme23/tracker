@@ -5,6 +5,7 @@ package collector
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"runtime"
 	"unsafe"
 
@@ -73,7 +74,11 @@ func (c *ProcessorCollector) collectFromRegistry(info *models.ProcessorInfo) err
 	}
 
 	if mhz, _, err := k.GetIntegerValue("~MHz"); err == nil {
-		info.BaseSpeedMHz = uint16(mhz)
+		if mhz > math.MaxUint16 {
+			info.BaseSpeedMHz = math.MaxUint16
+		} else {
+			info.BaseSpeedMHz = uint16(mhz)
+		}
 	}
 
 	if featureSet, _, err := k.GetIntegerValue("FeatureSet"); err == nil {
@@ -86,9 +91,18 @@ func (c *ProcessorCollector) collectFromRegistry(info *models.ProcessorInfo) err
 
 // enrichProcessorTopology gets topology information
 func (c *ProcessorCollector) enrichProcessorTopology(info *models.ProcessorInfo) {
-	fallbackThreads := uint32(runtime.NumCPU())
+	var fallbackThreads uint32
+	numCPU := runtime.NumCPU()
+	if numCPU <= 0 {
+		numCPU = 1
+	}
+	if numCPU > math.MaxUint32 {
+		numCPU = math.MaxUint32
+	}
+	fallbackThreads = uint32(numCPU)
 
 	var returnedLength uint32
+	// #nosec G103 -- passing pointer to Windows API
 	ret, _, _ := procGetLogicalProcessorInformationEx.Call(
 		uintptr(relationAll),
 		0,
@@ -102,6 +116,7 @@ func (c *ProcessorCollector) enrichProcessorTopology(info *models.ProcessorInfo)
 
 	buffer := make([]byte, returnedLength)
 
+	// #nosec G103 -- passing pointer to Windows API
 	ret, _, _ = procGetLogicalProcessorInformationEx.Call(
 		uintptr(relationAll),
 		uintptr(unsafe.Pointer(unsafe.SliceData(buffer))),
@@ -130,11 +145,22 @@ func (c *ProcessorCollector) setFallbackInfo(info *models.ProcessorInfo, logical
 func (c *ProcessorCollector) parseProcessorData(buffer []byte, info *models.ProcessorInfo, fallbackThreads uint32) {
 	var offset, numaNodesCount uint32
 
-	for offset+8 <= uint32(len(buffer)) {
+	// Statistics counters
+	cacheCount := 0
+	coreCount := 0
+
+	// Safe conversion of buffer length to uint32
+	// #nosec G115
+	bufferLen := uint32(len(buffer))
+	if uint64(len(buffer)) > math.MaxUint32 {
+		bufferLen = math.MaxUint32
+	}
+
+	for offset+8 <= bufferLen {
 		relationship := binary.LittleEndian.Uint32(buffer[offset : offset+4])
 		structSize := binary.LittleEndian.Uint32(buffer[offset+4 : offset+8])
 
-		if structSize == 0 || structSize < 8 || offset+structSize > uint32(len(buffer)) {
+		if structSize == 0 || structSize < 8 || offset+structSize > bufferLen {
 			break
 		}
 
@@ -142,16 +168,23 @@ func (c *ProcessorCollector) parseProcessorData(buffer []byte, info *models.Proc
 
 		switch relationship {
 		case relationProcessorCore:
+			coreCount++
 			c.parseProcessorCore(structBytes, info)
 
 		case relationNumaNode:
 			numaNodesCount++
 
 		case relationCache:
+			cacheCount++
 			c.parseCache(structBytes, info)
 		}
 
 		offset += structSize
+	}
+
+	// Log warning if no cache structures found
+	if cacheCount == 0 {
+		fmt.Printf("WARNING: No cache structures found (cores=%d, numa=%d)\n", coreCount, numaNodesCount)
 	}
 
 	info.NUMAEnabled = numaNodesCount > 1

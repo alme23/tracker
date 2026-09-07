@@ -4,6 +4,7 @@ package collector
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -377,74 +378,56 @@ func (c *OSCollector) getWindowsVersionNumbers() (major, minor, build uint32, is
 
 // getWindowsVersionName returns the Windows version name
 func (c *OSCollector) getWindowsVersionName(major, minor, build uint32) string {
-	_, _, _, isServer := c.getWindowsVersionNumbers()
+	major, minor, build, isServer := c.getWindowsVersionNumbers()
+	_ = major
+	_ = minor
+	_ = build
 
-	switch major {
-	case 10:
-		if minor == 0 {
-			if build >= 22000 {
-				// Windows 11 or Windows Server 2022+
-				if isServer {
-					if build >= 26100 {
-						return "Windows Server 2025"
-					}
-					return "Windows Server 2022"
-				}
-				return "Windows 11"
-			}
-			// Windows 10 or Windows Server 2016/2019
-			if isServer {
-				if build >= 17763 {
-					return "Windows Server 2019"
-				}
-				return "Windows Server 2016"
-			}
-			return "Windows 10"
-		}
-	case 6:
-		switch minor {
-		case 3:
-			if isServer {
-				return "Windows Server 2012 R2"
-			}
-			return "Windows 8.1"
-		case 2:
-			if isServer {
-				return "Windows Server 2012"
-			}
-			return "Windows 8"
-		case 1:
-			if isServer {
-				return "Windows Server 2008 R2"
-			}
-			return "Windows 7"
-		case 0:
-			if isServer {
-				return "Windows Server 2008"
-			}
-			return "Windows Vista"
-		}
-	case 5:
-		switch minor {
-		case 2:
-			if isServer {
-				return "Windows Server 2003"
-			}
-			return "Windows XP x64"
-		case 1:
-			return "Windows XP"
-		case 0:
-			if isServer {
-				return "Windows 2000 Server"
-			}
-			return "Windows 2000"
-		}
-	}
-
+	// Server versions
 	if isServer {
-		return fmt.Sprintf("Windows Server %d.%d", major, minor)
+		switch {
+		case major == 10 && build >= 26100:
+			return "Windows Server 2025"
+		case major == 10 && build >= 20348:
+			return "Windows Server 2022"
+		case major == 10 && build >= 17763:
+			return "Windows Server 2019"
+		case major == 10 && build >= 14393:
+			return "Windows Server 2016"
+		case major == 6 && minor == 3:
+			return "Windows Server 2012 R2"
+		case major == 6 && minor == 2:
+			return "Windows Server 2012"
+		case major == 6 && minor == 1:
+			return "Windows Server 2008 R2"
+		case major == 6 && minor == 0:
+			return "Windows Server 2008"
+		default:
+			return fmt.Sprintf("Windows Server %d.%d", major, minor)
+		}
 	}
-	return fmt.Sprintf("Windows %d.%d", major, minor)
+
+	// Client versions
+	switch {
+	case major == 10 && build >= 22000:
+		return "Windows 11"
+	case major == 10:
+		return "Windows 10"
+	case major == 6 && minor == 3:
+		return "Windows 8.1"
+	case major == 6 && minor == 2:
+		return "Windows 8"
+	case major == 6 && minor == 1:
+		return "Windows 7"
+	case major == 6 && minor == 0:
+		return "Windows Vista"
+	case major == 5 && minor == 1:
+		return "Windows XP"
+	case major == 5 && minor == 0:
+		return "Windows 2000"
+	default:
+		return fmt.Sprintf("Windows %d.%d", major, minor)
+	}
 }
 
 // getEditionFromAPI gets the edition via GetProductInfo
@@ -653,6 +636,9 @@ func (c *OSCollector) getInstallDate() int64 {
 
 	for _, path := range paths {
 		if val := c.readInstallTimestamp(path); val > 0 {
+			if val > math.MaxInt64 {
+				return math.MaxInt64
+			}
 			return int64(val)
 		}
 	}
